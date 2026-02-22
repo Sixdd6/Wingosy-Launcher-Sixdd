@@ -17,7 +17,7 @@ enum class DualGameDetailTab {
     OPTIONS
 }
 
-enum class ActiveModal { NONE, RATING, DIFFICULTY, STATUS, EMULATOR, COLLECTION, SAVE_NAME, UPDATES_DLC }
+enum class ActiveModal { NONE, RATING, DIFFICULTY, STATUS, EMULATOR, CORE, COLLECTION, SAVE_NAME, UPDATES_DLC }
 
 enum class GameDetailOption {
     PLAY,
@@ -26,6 +26,7 @@ enum class GameDetailOption {
     STATUS,
     TOGGLE_FAVORITE,
     CHANGE_EMULATOR,
+    CHANGE_CORE,
     UPDATES_DLC,
     ADD_TO_COLLECTION,
     REFRESH_METADATA,
@@ -70,6 +71,9 @@ data class DualGameDetailUiState(
     val saveFocusColumn: SaveFocusColumn = SaveFocusColumn.SLOTS,
     val activeChannel: String? = null,
     val activeSaveTimestamp: Long? = null,
+    val hasMultipleCores: Boolean = false,
+    val selectedCoreName: String? = null,
+    val selectedCoreId: String? = null,
     val downloadProgress: Float? = null,
     val downloadState: String? = null
 )
@@ -83,6 +87,7 @@ fun DualGameDetailUiState.visibleOptions(): List<GameDetailOption> {
         add(GameDetailOption.STATUS)
         add(GameDetailOption.TOGGLE_FAVORITE)
         if (isEmulated) add(GameDetailOption.CHANGE_EMULATOR)
+        if (hasMultipleCores && isEmulated) add(GameDetailOption.CHANGE_CORE)
         if (isDownloaded) add(GameDetailOption.UPDATES_DLC)
         add(GameDetailOption.ADD_TO_COLLECTION)
         if (isRommGame || isAndroidApp) add(GameDetailOption.REFRESH_METADATA)
@@ -119,6 +124,9 @@ data class DualGameDetailUpperState(
     val emulatorVersions: List<String> = emptyList(),
     val emulatorFocusIndex: Int = 0,
     val emulatorCurrentName: String? = null,
+    val coreNames: List<String> = emptyList(),
+    val coreFocusIndex: Int = 0,
+    val coreCurrentName: String? = null,
     val collectionItems: List<DualCollectionItem> = emptyList(),
     val collectionFocusIndex: Int = 0,
     val showCreateDialog: Boolean = false,

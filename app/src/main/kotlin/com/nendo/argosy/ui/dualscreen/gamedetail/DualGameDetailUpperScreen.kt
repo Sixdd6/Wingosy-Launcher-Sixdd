@@ -70,6 +70,7 @@ fun DualGameDetailUpperScreen(
     onModalRatingSelect: (Int) -> Unit = {},
     onModalStatusSelect: (String) -> Unit = {},
     onModalEmulatorSelect: (Int) -> Unit = {},
+    onModalCoreSelect: (Int) -> Unit = {},
     onModalCollectionToggle: (Long) -> Unit = {},
     onModalCollectionShowCreate: () -> Unit = {},
     onModalCollectionCreate: (String) -> Unit = {},
@@ -126,6 +127,13 @@ fun DualGameDetailUpperScreen(
                 currentEmulatorName = state.emulatorCurrentName,
                 focusIndex = state.emulatorFocusIndex,
                 onSelect = onModalEmulatorSelect,
+                onDismiss = onModalDismiss
+            )
+            ActiveModal.CORE -> DualCorePickerContent(
+                coreNames = state.coreNames,
+                currentCoreName = state.coreCurrentName,
+                focusIndex = state.coreFocusIndex,
+                onSelect = onModalCoreSelect,
                 onDismiss = onModalDismiss
             )
             ActiveModal.COLLECTION -> {
@@ -582,6 +590,69 @@ private fun DualEmulatorPickerContent(
                         name = name,
                         version = emulatorVersions.getOrNull(index)
                             ?.takeIf { it.isNotBlank() },
+                        isSelected = isSelected,
+                        isCurrent = isCurrent,
+                        onClick = { onSelect(itemIndex) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DualCorePickerContent(
+    coreNames: List<String>,
+    currentCoreName: String?,
+    focusIndex: Int,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.6f))
+            .touchOnly { onDismiss() },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth(0.6f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .touchOnly { }
+                .padding(24.dp)
+        ) {
+            Text(
+                text = "SELECT CORE",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                contentPadding = PaddingValues(vertical = 4.dp)
+            ) {
+                item {
+                    val isSelected = focusIndex == 0
+                    val isCurrent = currentCoreName == null
+                    EmulatorPickerItem(
+                        name = "Use Platform Default",
+                        version = null,
+                        isSelected = isSelected,
+                        isCurrent = isCurrent,
+                        onClick = { onSelect(0) }
+                    )
+                }
+                itemsIndexed(coreNames, key = { _, n -> n }) { index, name ->
+                    val itemIndex = index + 1
+                    val isSelected = focusIndex == itemIndex
+                    val isCurrent = name == currentCoreName
+                    EmulatorPickerItem(
+                        name = name,
+                        version = null,
                         isSelected = isSelected,
                         isCurrent = isCurrent,
                         onClick = { onSelect(itemIndex) }

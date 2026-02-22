@@ -281,6 +281,16 @@ class SecondaryHomeInputHandler(
                     )
                 }
             }
+            GameDetailOption.CHANGE_CORE -> {
+                lifecycleLaunch {
+                    val cores = com.nendo.argosy.data.emulator.EmulatorRegistry
+                        .getCoresForPlatform(vm.uiState.value.platformSlug)
+                    vm.openCorePicker(cores)
+                    broadcasts.broadcastCoreModalOpen(
+                        cores, vm.uiState.value.selectedCoreName
+                    )
+                }
+            }
             GameDetailOption.ADD_TO_COLLECTION -> {
                 vm.openCollectionModal()
                 lifecycleLaunch {
@@ -678,6 +688,37 @@ class SecondaryHomeInputHandler(
                     GamepadEvent.Confirm -> {
                         val idx = vm.emulatorPickerFocusIndex.value
                         vm.confirmEmulatorByIndex(idx)
+                        broadcasts.broadcastModalConfirmResult(
+                            modal, idx, null
+                        )
+                    }
+                    GamepadEvent.Back -> {
+                        vm.dismissPicker()
+                        broadcasts.broadcastModalClose()
+                    }
+                    else -> {}
+                }
+                return InputResult.HANDLED
+            }
+            ActiveModal.CORE -> {
+                when (event) {
+                    GamepadEvent.Up -> {
+                        vm.moveCorePickerFocus(-1)
+                        broadcasts.broadcastInlineUpdate(
+                            "core_focus",
+                            vm.corePickerFocusIndex.value
+                        )
+                    }
+                    GamepadEvent.Down -> {
+                        vm.moveCorePickerFocus(1)
+                        broadcasts.broadcastInlineUpdate(
+                            "core_focus",
+                            vm.corePickerFocusIndex.value
+                        )
+                    }
+                    GamepadEvent.Confirm -> {
+                        val idx = vm.corePickerFocusIndex.value
+                        vm.confirmCoreByIndex(idx)
                         broadcasts.broadcastModalConfirmResult(
                             modal, idx, null
                         )

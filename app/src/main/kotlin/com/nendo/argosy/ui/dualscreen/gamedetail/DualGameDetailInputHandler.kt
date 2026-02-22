@@ -18,6 +18,7 @@ class DualGameDetailInputHandler(
     private val onBroadcastInlineUpdate: (String, Any) -> Unit,
     private val onBroadcastDirectAction: (String, Long, String?) -> Unit,
     private val onBroadcastEmulatorModalOpen: (List<com.nendo.argosy.data.emulator.InstalledEmulator>, String?) -> Unit,
+    private val onBroadcastCoreModalOpen: (List<com.nendo.argosy.data.emulator.RetroArchCore>, String?) -> Unit,
     private val onBroadcastCollectionModalOpen: (DualGameDetailViewModel) -> Unit,
     private val onBroadcastSaveNamePrompt: (String, Long?) -> Unit,
     private val onBroadcastSaveAction: (String, Long, String?, Long?) -> Unit,
@@ -162,6 +163,35 @@ class DualGameDetailInputHandler(
                         val idx = vm.emulatorPickerFocusIndex.value
                         vm.confirmEmulatorByIndex(idx)
                         onBroadcastModalConfirm(ActiveModal.EMULATOR, idx, null)
+                    }
+                    GamepadEvent.Back -> {
+                        vm.dismissPicker()
+                        onBroadcastModalClose()
+                    }
+                    else -> {}
+                }
+                return InputResult.HANDLED
+            }
+            ActiveModal.CORE -> {
+                when (event) {
+                    GamepadEvent.Up -> {
+                        vm.moveCorePickerFocus(-1)
+                        onBroadcastInlineUpdate(
+                            "core_focus",
+                            vm.corePickerFocusIndex.value
+                        )
+                    }
+                    GamepadEvent.Down -> {
+                        vm.moveCorePickerFocus(1)
+                        onBroadcastInlineUpdate(
+                            "core_focus",
+                            vm.corePickerFocusIndex.value
+                        )
+                    }
+                    GamepadEvent.Confirm -> {
+                        val idx = vm.corePickerFocusIndex.value
+                        vm.confirmCoreByIndex(idx)
+                        onBroadcastModalConfirm(ActiveModal.CORE, idx, null)
                     }
                     GamepadEvent.Back -> {
                         vm.dismissPicker()
@@ -342,6 +372,14 @@ class DualGameDetailInputHandler(
                     )
                     vm.openEmulatorPicker(emulators)
                     onBroadcastEmulatorModalOpen(emulators, vm.uiState.value.emulatorName)
+                }
+            }
+            GameDetailOption.CHANGE_CORE -> {
+                lifecycleLaunch {
+                    val cores = com.nendo.argosy.data.emulator.EmulatorRegistry
+                        .getCoresForPlatform(vm.uiState.value.platformSlug)
+                    vm.openCorePicker(cores)
+                    onBroadcastCoreModalOpen(cores, vm.uiState.value.selectedCoreName)
                 }
             }
             GameDetailOption.ADD_TO_COLLECTION -> {

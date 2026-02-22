@@ -57,6 +57,20 @@ class ShowcaseViewModel(
         }
     }
 
+    fun onModalCoreSelect(index: Int) {
+        val state = detailState.value ?: return
+        detailState.update {
+            it?.copy(
+                modalType = ActiveModal.NONE,
+                coreCurrentName = if (index == 0) null
+                else state.coreNames.getOrNull(index - 1)
+            )
+        }
+        if (isControlActive()) {
+            broadcasts.broadcastInlineUpdate("core_confirm", index)
+        }
+    }
+
     fun onModalCollectionToggle(collectionId: Long) {
         detailState.update { s ->
             s?.copy(
@@ -123,6 +137,15 @@ class ShowcaseViewModel(
         }
     }
 
+    fun moveCoreFocus(delta: Int) {
+        detailState.update { state ->
+            val max = state?.coreNames?.size ?: 0
+            state?.copy(
+                coreFocusIndex = (state.coreFocusIndex + delta).coerceIn(0, max)
+            )
+        }
+    }
+
     fun moveCollectionFocus(delta: Int) {
         detailState.update { state ->
             val max = state?.collectionItems?.size ?: 0
@@ -155,6 +178,7 @@ class ShowcaseViewModel(
                 when (modal) {
                     ActiveModal.STATUS -> moveModalStatus(-1)
                     ActiveModal.EMULATOR -> moveEmulatorFocus(-1)
+                    ActiveModal.CORE -> moveCoreFocus(-1)
                     ActiveModal.COLLECTION -> moveCollectionFocus(-1)
                     else -> {}
                 }
@@ -164,6 +188,7 @@ class ShowcaseViewModel(
                 when (modal) {
                     ActiveModal.STATUS -> moveModalStatus(1)
                     ActiveModal.EMULATOR -> moveEmulatorFocus(1)
+                    ActiveModal.CORE -> moveCoreFocus(1)
                     ActiveModal.COLLECTION -> moveCollectionFocus(1)
                     else -> {}
                 }
@@ -177,6 +202,8 @@ class ShowcaseViewModel(
                         onModalStatusSelect(state.modalStatusSelected ?: return true)
                     ActiveModal.EMULATOR ->
                         onModalEmulatorSelect(state.emulatorFocusIndex)
+                    ActiveModal.CORE ->
+                        onModalCoreSelect(state.coreFocusIndex)
                     ActiveModal.COLLECTION -> {
                         val idx = state.collectionFocusIndex
                         if (idx < state.collectionItems.size) {

@@ -423,6 +423,7 @@ fun ArgosyApp(
                 when (state?.modalType) {
                     ActiveModal.STATUS -> activity?.moveDualModalStatus(-1)
                     ActiveModal.EMULATOR -> activity?.moveDualEmulatorFocus(-1)
+                    ActiveModal.CORE -> activity?.moveDualCoreFocus(-1)
                     ActiveModal.COLLECTION -> activity?.moveDualCollectionFocus(-1)
                     else -> {}
                 }
@@ -434,6 +435,7 @@ fun ArgosyApp(
                 when (state?.modalType) {
                     ActiveModal.STATUS -> activity?.moveDualModalStatus(1)
                     ActiveModal.EMULATOR -> activity?.moveDualEmulatorFocus(1)
+                    ActiveModal.CORE -> activity?.moveDualCoreFocus(1)
                     ActiveModal.COLLECTION -> activity?.moveDualCollectionFocus(1)
                     else -> {}
                 }
@@ -446,6 +448,7 @@ fun ArgosyApp(
                     ActiveModal.RATING, ActiveModal.DIFFICULTY,
                     ActiveModal.STATUS -> activity?.confirmDualModal()
                     ActiveModal.EMULATOR -> activity?.confirmDualEmulatorSelection()
+                    ActiveModal.CORE -> activity?.confirmDualCoreSelection()
                     ActiveModal.COLLECTION -> activity?.toggleDualCollectionAtFocus()
                     ActiveModal.SAVE_NAME -> activity?.confirmDualSaveName()
                     else -> {}
@@ -805,6 +808,12 @@ fun ArgosyApp(
                                     a.confirmDualEmulatorSelection()
                                 }
                             },
+                            onModalCoreSelect = { index ->
+                                activity?.let { a ->
+                                    a.setDualCoreFocus(index)
+                                    a.confirmDualCoreSelection()
+                                }
+                            },
                             onModalCollectionToggle = { collectionId ->
                                 activity?.let { a ->
                                     val idx = detailState.collectionItems
@@ -1020,6 +1029,12 @@ fun ArgosyApp(
                                     dualScreenManager.openEmulatorModal(
                                         emulators.map { it.def.displayName },
                                         emulators.map { it.versionName ?: "" },
+                                        currentName
+                                    )
+                                },
+                                onBroadcastCoreModalOpen = { cores, currentName ->
+                                    dualScreenManager.openCoreModal(
+                                        cores.map { it.displayName },
                                         currentName
                                     )
                                 },
@@ -1260,6 +1275,17 @@ fun ArgosyApp(
                                                 emulators.map { it.def.displayName },
                                                 emulators.map { it.versionName ?: "" },
                                                 vm.uiState.value.emulatorName
+                                            )
+                                        }
+                                    }
+                                    GameDetailOption.CHANGE_CORE -> {
+                                        scope.launch {
+                                            val cores = com.nendo.argosy.data.emulator.EmulatorRegistry
+                                                .getCoresForPlatform(vm.uiState.value.platformSlug)
+                                            vm.openCorePicker(cores)
+                                            dualScreenManager.openCoreModal(
+                                                cores.map { it.displayName },
+                                                vm.uiState.value.selectedCoreName
                                             )
                                         }
                                     }

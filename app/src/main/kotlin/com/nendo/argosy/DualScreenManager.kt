@@ -388,7 +388,7 @@ class DualScreenManager(
 
     fun openModal(type: ActiveModal, value: Int = 0, statusSelected: String? = null, statusCurrent: String? = null) {
         when (type) {
-            ActiveModal.EMULATOR, ActiveModal.COLLECTION, ActiveModal.SAVE_NAME, ActiveModal.UPDATES_DLC -> return
+            ActiveModal.EMULATOR, ActiveModal.CORE, ActiveModal.COLLECTION, ActiveModal.SAVE_NAME, ActiveModal.UPDATES_DLC -> return
             else -> handleDualModalOpen(type, value, statusSelected, statusCurrent)
         }
         refocusMain()
@@ -474,6 +474,10 @@ class DualScreenManager(
         when (modal) {
             ActiveModal.EMULATOR -> {
                 confirmDualEmulatorSelection()
+                return
+            }
+            ActiveModal.CORE -> {
+                confirmDualCoreSelection()
                 return
             }
             ActiveModal.COLLECTION -> {
@@ -566,6 +570,15 @@ class DualScreenManager(
                     s?.copy(
                         modalType = ActiveModal.NONE,
                         emulatorCurrentName = if (intValue == 0) null else s.emulatorNames.getOrNull(intValue - 1)
+                    )
+                }
+            }
+            "core_focus" -> _dualGameDetailState.update { s -> s?.copy(coreFocusIndex = intValue) }
+            "core_confirm" -> {
+                _dualGameDetailState.update { s ->
+                    s?.copy(
+                        modalType = ActiveModal.NONE,
+                        coreCurrentName = if (intValue == 0) null else s.coreNames.getOrNull(intValue - 1)
                     )
                 }
             }
@@ -719,6 +732,10 @@ class DualScreenManager(
                 confirmDualEmulatorSelection()
                 return
             }
+            ActiveModal.CORE -> {
+                confirmDualCoreSelection()
+                return
+            }
             ActiveModal.COLLECTION -> {
                 toggleDualCollectionAtFocus()
                 return
@@ -796,6 +813,51 @@ class DualScreenManager(
                 emulatorCurrentName = if (index == 0) null
                 else state.emulatorNames.getOrNull(index - 1)
             )
+        }
+    }
+
+    fun openCoreModal(names: List<String>, current: String?) {
+        _dualGameDetailState.update { state ->
+            state?.copy(
+                modalType = ActiveModal.CORE,
+                coreNames = names,
+                coreFocusIndex = 0,
+                coreCurrentName = current
+            )
+        }
+        refocusMain()
+    }
+
+    fun moveDualCoreFocus(delta: Int) {
+        _dualGameDetailState.update { state ->
+            val max = state?.coreNames?.size ?: 0
+            state?.copy(
+                coreFocusIndex = (state.coreFocusIndex + delta)
+                    .coerceIn(0, max)
+            )
+        }
+    }
+
+    fun confirmDualCoreSelection() {
+        val state = _dualGameDetailState.value ?: return
+        val index = state.coreFocusIndex
+        companionHost?.onModalResult(
+            dismissed = false, type = ActiveModal.CORE.name,
+            value = 0, statusSelected = null, selectedIndex = index,
+            collectionToggleId = -1, collectionCreateName = null
+        )
+        _dualGameDetailState.update {
+            it?.copy(
+                modalType = ActiveModal.NONE,
+                coreCurrentName = if (index == 0) null
+                else state.coreNames.getOrNull(index - 1)
+            )
+        }
+    }
+
+    fun setDualCoreFocus(index: Int) {
+        _dualGameDetailState.update { state ->
+            state?.copy(coreFocusIndex = index)
         }
     }
 

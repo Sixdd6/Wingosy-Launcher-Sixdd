@@ -17,7 +17,10 @@ import com.nendo.argosy.data.local.entity.EmulatorConfigEntity
 import com.nendo.argosy.data.local.entity.getDisplayName
 import com.nendo.argosy.data.emulator.EmulatorRegistry
 import com.nendo.argosy.data.download.ZipExtractor
+import com.nendo.argosy.data.emulator.EmulatorResolver
 import com.nendo.argosy.data.emulator.InstalledEmulator
+import com.nendo.argosy.data.emulator.LaunchConfig
+import com.nendo.argosy.data.emulator.RetroArchCore
 import com.nendo.argosy.data.model.GameSource
 import com.nendo.argosy.ui.screens.gamedetail.UpdateFileType
 import com.nendo.argosy.ui.screens.gamedetail.UpdateFileUi
@@ -115,6 +118,11 @@ class DualGameDetailViewModel(
 
     private val _emulatorPickerFocusIndex = MutableStateFlow(0)
     val emulatorPickerFocusIndex: StateFlow<Int> = _emulatorPickerFocusIndex.asStateFlow()
+
+    private val _corePickerList = MutableStateFlow<List<RetroArchCore>>(emptyList())
+
+    private val _corePickerFocusIndex = MutableStateFlow(0)
+    val corePickerFocusIndex: StateFlow<Int> = _corePickerFocusIndex.asStateFlow()
 
     private val _collectionPickerFocusIndex = MutableStateFlow(0)
     val collectionPickerFocusIndex: StateFlow<Int> = _collectionPickerFocusIndex.asStateFlow()
@@ -232,7 +240,7 @@ class DualGameDetailViewModel(
                     gameDao.updateStatus(gameId, value)
                 }
             }
-            ActiveModal.EMULATOR, ActiveModal.COLLECTION,
+            ActiveModal.EMULATOR, ActiveModal.CORE, ActiveModal.COLLECTION,
             ActiveModal.SAVE_NAME, ActiveModal.UPDATES_DLC -> return
             ActiveModal.NONE -> return
         }
@@ -267,9 +275,25 @@ class DualGameDetailViewModel(
                 game.source == GameSource.STEAM ||
                 game.source == GameSource.ANDROID_APP
 
-            val emulatorConfig =
-                emulatorConfigDao.getByGameId(game.id)
-                    ?: emulatorConfigDao.getDefaultForPlatform(game.platformId)
+            val gameSpecificConfig = emulatorConfigDao.getByGameId(game.id)
+            val platformDefaultConfig = emulatorConfigDao.getDefaultForPlatform(game.platformId)
+            val emulatorConfig = gameSpecificConfig ?: platformDefaultConfig
+
+            val platformCores = EmulatorRegistry.getCoresForPlatform(game.platformSlug)
+            val emulatorDef = emulatorConfig?.packageName?.let { pkg ->
+                EmulatorRegistry.getByPackage(pkg)
+            }
+            val isRetroArch = emulatorDef?.launchConfig is LaunchConfig.RetroArch
+            val isBuiltIn = emulatorDef?.launchConfig is LaunchConfig.BuiltIn
+            val hasMultipleCores = (isRetroArch || isBuiltIn || emulatorDef == null) &&
+                platformCores.size > 1
+
+            val selectedCoreId = gameSpecificConfig?.coreName
+                ?: platformDefaultConfig?.coreName
+                ?: EmulatorRegistry.getDefaultCore(game.platformSlug)?.id
+            val selectedCoreName = if (hasMultipleCores) {
+                platformCores.find { it.id == selectedCoreId }?.displayName
+            } else null
 
             val activeChannel = game.activeSaveChannel
             val activeSaveTimestamp = game.activeSaveTimestamp
@@ -302,6 +326,9 @@ class DualGameDetailViewModel(
                 platformSlug = game.platformSlug,
                 platformId = game.platformId,
                 emulatorName = emulatorConfig?.displayName,
+                hasMultipleCores = hasMultipleCores,
+                selectedCoreName = selectedCoreName,
+                selectedCoreId = selectedCoreId,
                 activeChannel = activeChannel,
                 activeSaveTimestamp = activeSaveTimestamp
             )
@@ -701,6 +728,35 @@ class DualGameDetailViewModel(
             }
         }
         _activeModal.value = ActiveModal.NONE
+    }
+
+    fun openCorePicker(cores: List<RetroArchCore>) {
+        _corePickerList.value = cores
+        _corePickerFocusIndex.value = 0
+        _activeModal.value = ActiveModal.CORE
+    }
+
+    fun confirmCoreByIndex(index: Int) {
+        val cores = _corePickerList.value
+        val selectedCore = if (index == 0) null else cores.getOrNull(index - 1)
+        val state = _uiState.value
+        viewModelScope.launch {
+            val coreId = selectedCore?.id
+            emulatorConfigDao.updateCoreNameForGame(state.gameId, coreId)
+            _uiState.update {
+                it.copy(
+                    selectedCoreName = selectedCore?.displayName,
+                    selectedCoreId = coreId
+                )
+            }
+        }
+        _activeModal.value = ActiveModal.NONE
+    }
+
+    fun moveCorePickerFocus(delta: Int) {
+        val total = _corePickerList.value.size + 1
+        val max = (total - 1).coerceAtLeast(0)
+        _corePickerFocusIndex.update { (it + delta).coerceIn(0, max) }
     }
 
     fun openCollectionModal() {

@@ -364,12 +364,14 @@ class GameDetailViewModel @Inject constructor(
             val isRetroArch = emulatorDef?.launchConfig is LaunchConfig.RetroArch
             val isBuiltIn = emulatorDef?.launchConfig is LaunchConfig.BuiltIn
 
+            val platformCores = EmulatorRegistry.getCoresForPlatform(game.platformSlug)
+            val hasMultipleCores = (isRetroArch || isBuiltIn) && platformCores.size > 1
+
             val selectedCoreId = gameSpecificConfig?.coreName
                 ?: platformDefaultConfig?.coreName
                 ?: EmulatorRegistry.getDefaultCore(game.platformSlug)?.id
             val selectedCoreName = if (isRetroArch || isBuiltIn) {
-                EmulatorRegistry.getCoresForPlatform(game.platformSlug)
-                    .find { it.id == selectedCoreId }?.displayName
+                platformCores.find { it.id == selectedCoreId }?.displayName
             } else null
 
             val isSteamGame = game.source == GameSource.STEAM
@@ -452,6 +454,7 @@ class GameDetailViewModel @Inject constructor(
                         canPlay = canPlay,
                         isRetroArch = isRetroArch,
                         isBuiltIn = isBuiltIn,
+                        hasMultipleCores = hasMultipleCores,
                         selectedCoreName = selectedCoreName,
                         achievements = cachedAchievements,
                         canManageSaves = canManageSaves,
@@ -799,7 +802,7 @@ class GameDetailViewModel @Inject constructor(
             isRommGame = state.game?.isRommGame == true,
             isAndroidApp = state.game?.isAndroidApp == true,
             canManageSaves = state.game?.canManageSaves == true,
-            isRetroArch = state.game?.isRetroArchEmulator == true,
+            hasMultipleCores = state.game?.hasMultipleCores == true,
             isMultiDisc = state.game?.isMultiDisc == true,
             isSteamGame = state.game?.isSteamGame == true,
             hasUpdates = state.updateFiles.isNotEmpty() || state.dlcFiles.isNotEmpty()
@@ -843,7 +846,7 @@ class GameDetailViewModel @Inject constructor(
             isRommGame = state.game?.isRommGame == true,
             isAndroidApp = state.game?.isAndroidApp == true,
             canManageSaves = state.game?.canManageSaves == true,
-            isRetroArch = state.game?.isRetroArchEmulator == true,
+            hasMultipleCores = state.game?.hasMultipleCores == true,
             isMultiDisc = state.game?.isMultiDisc == true,
             isSteamGame = state.game?.isSteamGame == true,
             hasUpdates = state.updateFiles.isNotEmpty() || state.dlcFiles.isNotEmpty(),
@@ -1045,7 +1048,7 @@ class GameDetailViewModel @Inject constructor(
 
     fun showCorePicker() {
         val game = _uiState.value.game ?: return
-        if (!game.isRetroArchEmulator) return
+        if (!game.hasMultipleCores) return
         moreOptionsDelegate.reset()
         pickerModalDelegate.showCorePicker(game.platformSlug, _uiState.value.selectedCoreId)
     }

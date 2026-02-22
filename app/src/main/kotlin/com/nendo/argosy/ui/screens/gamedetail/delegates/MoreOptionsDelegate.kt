@@ -48,7 +48,7 @@ class MoreOptionsDelegate @Inject constructor(
         isRommGame: Boolean,
         isAndroidApp: Boolean,
         canManageSaves: Boolean,
-        isRetroArch: Boolean,
+        hasMultipleCores: Boolean,
         isMultiDisc: Boolean,
         isSteamGame: Boolean,
         hasUpdates: Boolean
@@ -61,7 +61,7 @@ class MoreOptionsDelegate @Inject constructor(
         if (canManageSaves) optionCount++
         if (canTrackProgress) optionCount += 2  // Ratings & Status + Refresh
         if (isSteamGame || isEmulatedGame) optionCount++
-        if (isRetroArch && isEmulatedGame) optionCount++
+        if (hasMultipleCores && isEmulatedGame) optionCount++
         if (isMultiDisc) optionCount++
         if (hasUpdates) optionCount++
         optionCount++  // Add to Collection (always present)
@@ -79,7 +79,7 @@ class MoreOptionsDelegate @Inject constructor(
         isRommGame: Boolean,
         isAndroidApp: Boolean,
         canManageSaves: Boolean,
-        isRetroArch: Boolean,
+        hasMultipleCores: Boolean,
         isMultiDisc: Boolean,
         isSteamGame: Boolean,
         hasUpdates: Boolean,
@@ -95,7 +95,7 @@ class MoreOptionsDelegate @Inject constructor(
         val saveCacheIdx = if (canManageSaves) currentIdx++ else -1
         val ratingsStatusIdx = if (canTrackProgress) currentIdx++ else -1
         val emulatorOrLauncherIdx = if (isSteamGame || isEmulatedGame) currentIdx++ else -1
-        val coreIdx = if (isRetroArch && isEmulatedGame) currentIdx++ else -1
+        val coreIdx = if (hasMultipleCores && isEmulatedGame) currentIdx++ else -1
         val titleIdIdx = if (usesTitleId && isEmulatedGame) currentIdx++ else -1
         val discIdx = if (isMultiDisc) currentIdx++ else -1
         val updatesIdx = if (hasUpdates) currentIdx++ else -1

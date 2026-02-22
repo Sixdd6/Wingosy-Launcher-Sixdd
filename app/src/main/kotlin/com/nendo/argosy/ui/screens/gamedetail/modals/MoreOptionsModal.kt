@@ -85,7 +85,7 @@ fun MoreOptionsModal(
                 onClick = { onAction(MoreOptionAction.ChangeEmulator) }
             )
         }
-        if (game.isRetroArchEmulator && isEmulatedGame) {
+        if (game.hasMultipleCores && isEmulatedGame) {
             val idx = currentIndex++
             OptionItem(
                 label = "Change Core",

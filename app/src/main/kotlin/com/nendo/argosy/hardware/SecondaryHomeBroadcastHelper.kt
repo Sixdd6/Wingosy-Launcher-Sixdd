@@ -58,6 +58,13 @@ class SecondaryHomeBroadcastHelper(
         )
     }
 
+    fun broadcastCoreModalOpen(
+        cores: List<com.nendo.argosy.data.emulator.RetroArchCore>,
+        currentName: String?
+    ) {
+        dsm.openCoreModal(cores.map { it.displayName }, currentName)
+    }
+
     fun broadcastCollectionModalOpen(vm: DualGameDetailViewModel) {
         val items = vm.collectionItems.value
         dsm.openCollectionModal(

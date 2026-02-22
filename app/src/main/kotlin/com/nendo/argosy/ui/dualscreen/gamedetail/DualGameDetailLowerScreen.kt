@@ -148,6 +148,7 @@ fun DualGameDetailLowerScreen(
                         userDifficulty = state.userDifficulty,
                         status = state.status,
                         emulatorName = state.emulatorName,
+                        coreName = state.selectedCoreName,
                         selectedIndex = selectedOptionIndex,
                         onOptionSelected = onOptionSelected
                     )
@@ -673,10 +674,12 @@ private fun OptionsTabContent(
     userDifficulty: Int,
     status: String?,
     emulatorName: String?,
+    coreName: String?,
     selectedIndex: Int,
     onOptionSelected: (GameDetailOption) -> Unit
 ) {
     val emulatorText = emulatorName ?: "Platform Default"
+    val coreText = coreName ?: "Default"
     val completionStatus = CompletionStatus.fromApiValue(status)
 
     val dlState = downloadState
@@ -776,6 +779,9 @@ private fun OptionsTabContent(
         GameDetailOption.CHANGE_EMULATOR -> OptionEntry(
             option, Icons.Filled.Settings, "Change Emulator", emulatorText
         )
+        GameDetailOption.CHANGE_CORE -> OptionEntry(
+            option, Icons.Filled.Settings, "Change Core", coreText
+        )
         GameDetailOption.UPDATES_DLC -> OptionEntry(
             option, Icons.Filled.SystemUpdate, "Updates & DLC"
         )
@@ -802,6 +808,7 @@ private fun OptionsTabContent(
     )
     val managementGroup = setOf(
         GameDetailOption.CHANGE_EMULATOR,
+        GameDetailOption.CHANGE_CORE,
         GameDetailOption.UPDATES_DLC,
         GameDetailOption.ADD_TO_COLLECTION,
         GameDetailOption.REFRESH_METADATA

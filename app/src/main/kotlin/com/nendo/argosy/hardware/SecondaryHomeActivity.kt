@@ -429,6 +429,11 @@ class SecondaryHomeActivity :
                 else vm.dismissPicker()
                 refocusSelf()
             }
+            ActiveModal.CORE.name -> {
+                if (selectedIndex >= 0) vm.confirmCoreByIndex(selectedIndex)
+                else vm.dismissPicker()
+                refocusSelf()
+            }
             ActiveModal.SAVE_NAME.name -> refocusSelf()
             ActiveModal.COLLECTION.name -> {
                 if (collectionCreateName != null) {
