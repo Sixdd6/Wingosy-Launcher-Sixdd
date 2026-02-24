@@ -25,7 +25,6 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.Icon
 import androidx.compose.foundation.shape.CircleShape
@@ -326,21 +325,30 @@ fun GameCard(
                 effectiveCoverPath
             }
 
-            AsyncImage(
-                model = imageData,
-                contentDescription = game.title,
-                contentScale = ContentScale.Crop,
-                colorFilter = saturationColorFilter,
-                modifier = Modifier.fillMaxSize(),
-                onSuccess = {
-                    onCoverLoaded?.invoke(game.id, effectiveCoverPath)
-                },
-                onError = {
-                    if (onCoverLoadFailed != null && effectiveCoverPath.startsWith("/")) {
-                        onCoverLoadFailed(game.id, effectiveCoverPath)
+            if (downloadIndicator.isActive) {
+                DownloadProgressCover(
+                    imageData = imageData,
+                    progress = downloadIndicator.progress,
+                    badgeSize = 28.dp,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                AsyncImage(
+                    model = imageData,
+                    contentDescription = game.title,
+                    contentScale = ContentScale.Crop,
+                    colorFilter = saturationColorFilter,
+                    modifier = Modifier.fillMaxSize(),
+                    onSuccess = {
+                        onCoverLoaded?.invoke(game.id, effectiveCoverPath)
+                    },
+                    onError = {
+                        if (onCoverLoadFailed != null && effectiveCoverPath.startsWith("/")) {
+                            onCoverLoadFailed(game.id, effectiveCoverPath)
+                        }
                     }
-                }
-            )
+                )
+            }
 
             if (useGlassBorder) {
                 val glassTintAlpha = boxArtStyle.glassBorderTintAlpha
@@ -764,27 +772,6 @@ fun GameCard(
             )
         }
 
-        if (downloadIndicator.isActive) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(Dimens.spacingSm)
-                    .size(Dimens.iconSm + Dimens.spacingXs)
-                    .background(
-                        MaterialTheme.colorScheme.secondary.copy(alpha = 0.9f),
-                        CircleShape
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Download,
-                    contentDescription = "Downloading",
-                    tint = Color.White,
-                    modifier = Modifier.size(Dimens.iconXs)
-                )
-            }
-        }
-
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -836,59 +823,6 @@ fun GameCard(
                 }
             }
 
-            if (downloadIndicator.isActive) {
-                val secondaryColor = MaterialTheme.colorScheme.secondary
-                val progressColor = if (downloadIndicator.isPaused || downloadIndicator.isQueued) {
-                    secondaryColor.copy(alpha = 0.5f)
-                } else {
-                    secondaryColor
-                }
-                val progressBarHeight = Dimens.spacingSm - Dimens.borderMedium
-
-                val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
-                val shimmerOffset by infiniteTransition.animateFloat(
-                    initialValue = -0.3f,
-                    targetValue = 1.8f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(1300, easing = LinearEasing),
-                        repeatMode = RepeatMode.Restart
-                    ),
-                    label = "shimmer"
-                )
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(progressBarHeight)
-                        .background(Color.Gray.copy(alpha = 0.6f))
-                        .then(
-                            if (downloadIndicator.isDownloading) {
-                                Modifier.drawBehind {
-                                    val shimmerWidth = size.width * 0.25f
-                                    val shimmerX = shimmerOffset * size.width
-                                    drawRect(
-                                        brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
-                                            colors = listOf(
-                                                Color.Transparent,
-                                                Color.White.copy(alpha = 0.4f),
-                                                Color.Transparent
-                                            ),
-                                            startX = shimmerX - shimmerWidth / 2,
-                                            endX = shimmerX + shimmerWidth / 2
-                                        )
-                                    )
-                                }
-                            } else Modifier
-                        )
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(downloadIndicator.progress.coerceIn(0f, 1f))
-                            .height(progressBarHeight)
-                            .background(progressColor)
-                    )
-                }
-            }
         }
     }
 }

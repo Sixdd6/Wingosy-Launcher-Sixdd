@@ -352,7 +352,14 @@ class DownloadManager @Inject constructor(
         if (currentState.queue.any { it.gameId == gameId }) return
 
         val existing = downloadQueueDao.getByGameId(gameId)
-        if (existing != null) return
+        if (existing != null) {
+            Log.d(TAG, "enqueueDownload: clearing stale queue entry for $gameTitle (state=${existing.state})")
+            existing.tempFilePath?.let { path ->
+                val tempFile = File(path)
+                if (tempFile.exists()) tempFile.delete()
+            }
+            downloadQueueDao.deleteByGameId(gameId)
+        }
 
         val platformDir = getDownloadDir(platformSlug)
         val tempFilePath = File(platformDir, "${fileName}.tmp").absolutePath
