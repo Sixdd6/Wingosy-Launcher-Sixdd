@@ -32,11 +32,11 @@ class RomMApiClient @Inject constructor(
         limit: Int = 100,
         offset: Int = 0
     ): Map<String, String> {
-        val usePluralizedParams = isVersionAtLeast("4.6.0")
-        val platformKey = if (usePluralizedParams) "platform_ids" else "platform_id"
-
         return buildMap {
-            platformId?.let { put(platformKey, it.toString()) }
+            platformId?.let {
+                put("platform_ids", it.toString())
+                put("platform_id", it.toString())
+            }
             searchTerm?.let { put("search_term", it) }
             put("order_by", orderBy)
             put("order_dir", orderDir)

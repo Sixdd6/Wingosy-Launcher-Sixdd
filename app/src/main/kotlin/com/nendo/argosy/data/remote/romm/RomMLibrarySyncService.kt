@@ -329,7 +329,9 @@ class RomMLibrarySyncService @Inject constructor(
         }
     }
 
-    private suspend fun syncRom(rom: RomMRom, platformId: Long, platformSlug: String): Pair<Boolean, GameEntity> {
+    private suspend fun syncRom(rom: RomMRom): Pair<Boolean, GameEntity> {
+        val platformId = rom.platformId
+        val platformSlug = rom.platformSlug
         val existing = gameDao.getByRommId(rom.id)
 
         val migrationSources = if (existing == null && rom.igdbId != null) {
@@ -589,7 +591,7 @@ class RomMLibrarySyncService @Inject constructor(
                             seenRommIds.add(rom.id)
                             if (hasRA) romsWithRA.add(rom.id)
                             try {
-                                syncRom(rom, platform.id, platform.slug)
+                                syncRom(rom)
                                 updated++
                             } catch (_: Exception) {}
                         }
@@ -602,7 +604,7 @@ class RomMLibrarySyncService @Inject constructor(
                 if (hasRA) romsWithRA.add(rom.id)
 
                 try {
-                    val (isNew, _) = syncRom(rom, platform.id, platform.slug)
+                    val (isNew, _) = syncRom(rom)
                     if (isNew) added++ else updated++
 
                     val isSiblingBasedMultiDisc = rom.hasDiscSiblings && !rom.isFolderMultiDisc
