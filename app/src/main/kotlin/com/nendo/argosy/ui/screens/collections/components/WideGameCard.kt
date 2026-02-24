@@ -1,8 +1,8 @@
 package com.nendo.argosy.ui.screens.collections.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import com.nendo.argosy.ui.util.clickableNoFocus
+import com.nendo.argosy.ui.util.focusBorder
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -72,15 +72,10 @@ fun WideGameCard(
     val boxArtStyle = LocalBoxArtStyle.current
     val cornerRadius = boxArtStyle.cornerRadiusDp
     val shape = RoundedCornerShape(cornerRadius)
-    val borderModifier = if (isFocused) {
-        Modifier.border(3.dp, MaterialTheme.colorScheme.primary, shape)
-    } else Modifier
-
-
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .then(borderModifier)
+            .focusBorder(isFocused, MaterialTheme.colorScheme.primary, 3.dp, shape)
             .clickableNoFocus(onClick = onClick),
         shape = shape,
         colors = CardDefaults.cardColors(

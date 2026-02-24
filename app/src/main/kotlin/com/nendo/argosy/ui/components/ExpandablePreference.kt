@@ -1,7 +1,7 @@
 package com.nendo.argosy.ui.components
 
-import androidx.compose.foundation.background
 import com.nendo.argosy.ui.util.clickableNoFocus
+import com.nendo.argosy.ui.util.focusBackground
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,11 +17,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import com.nendo.argosy.ui.theme.Dimens
 
 @Composable
@@ -33,11 +31,6 @@ fun ExpandablePreference(
     onToggle: () -> Unit
 ) {
     val preferenceShape = RoundedCornerShape(Dimens.radiusLg)
-    val backgroundColor = if (isFocused) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
     val contentColor = if (isFocused) {
         MaterialTheme.colorScheme.onPrimaryContainer
     } else {
@@ -54,7 +47,7 @@ fun ExpandablePreference(
             .fillMaxWidth()
             .heightIn(min = Dimens.settingsItemMinHeight)
             .clip(preferenceShape)
-            .background(backgroundColor, preferenceShape)
+            .focusBackground(isFocused, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.surface, preferenceShape)
             .clickableNoFocus(onClick = onToggle)
             .padding(Dimens.spacingMd),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -89,11 +82,6 @@ fun ExpandedChildItem(
     onClick: () -> Unit
 ) {
     val preferenceShape = RoundedCornerShape(Dimens.radiusLg)
-    val backgroundColor = if (isFocused) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-    }
     val contentColor = if (isFocused) {
         MaterialTheme.colorScheme.onPrimaryContainer
     } else {
@@ -111,7 +99,7 @@ fun ExpandedChildItem(
             .padding(start = Dimens.spacingLg)
             .heightIn(min = Dimens.settingsItemMinHeight)
             .clip(preferenceShape)
-            .background(backgroundColor, preferenceShape)
+            .focusBackground(isFocused, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), preferenceShape)
             .clickableNoFocus(onClick = onClick)
             .padding(Dimens.spacingMd),
         horizontalArrangement = Arrangement.SpaceBetween,

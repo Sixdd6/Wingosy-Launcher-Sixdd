@@ -3,6 +3,7 @@ package com.nendo.argosy.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import com.nendo.argosy.ui.util.clickableNoFocus
+import com.nendo.argosy.ui.util.focusBackground
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,17 +56,14 @@ private fun preferenceModifier(
     onClick: (() -> Unit)? = null
 ): Modifier {
     val preferenceShape = RoundedCornerShape(Dimens.radiusLg)
-    val backgroundColor = when {
-        isDangerous && isFocused -> MaterialTheme.colorScheme.errorContainer
-        isFocused -> MaterialTheme.colorScheme.primaryContainer
-        else -> MaterialTheme.colorScheme.surface
-    }
+    val focusedColor = if (isDangerous) MaterialTheme.colorScheme.errorContainer
+                       else MaterialTheme.colorScheme.primaryContainer
 
     return Modifier
         .fillMaxWidth()
         .heightIn(min = Dimens.settingsItemMinHeight)
         .clip(preferenceShape)
-        .background(backgroundColor, preferenceShape)
+        .focusBackground(isFocused, focusedColor, MaterialTheme.colorScheme.surface, preferenceShape)
         .then(if (onClick != null) Modifier.clickableNoFocus(onClick = onClick) else Modifier)
         .padding(Dimens.spacingMd)
 }
@@ -350,18 +348,13 @@ fun SwitchPreference(
     onReset: (() -> Unit)? = null
 ) {
     val preferenceShape = RoundedCornerShape(Dimens.radiusLg)
-    val backgroundColor = if (isFocused) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = Dimens.settingsItemMinHeight)
             .clip(preferenceShape)
-            .background(backgroundColor, preferenceShape)
+            .focusBackground(isFocused, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.surface, preferenceShape)
             .padding(Dimens.spacingMd),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -787,11 +780,6 @@ fun ImageCachePreference(
     onReset: () -> Unit
 ) {
     val preferenceShape = RoundedCornerShape(Dimens.radiusLg)
-    val backgroundColor = if (isFocused) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
     val contentColor = if (isFocused) {
         MaterialTheme.colorScheme.onPrimaryContainer
     } else {
@@ -809,7 +797,7 @@ fun ImageCachePreference(
             .fillMaxWidth()
             .heightIn(min = Dimens.settingsItemMinHeight)
             .clip(preferenceShape)
-            .background(backgroundColor, preferenceShape)
+            .focusBackground(isFocused, MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.surface, preferenceShape)
             .padding(Dimens.spacingMd),
         verticalAlignment = Alignment.CenterVertically
     ) {

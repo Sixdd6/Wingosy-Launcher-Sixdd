@@ -2,8 +2,9 @@ package com.nendo.argosy.ui.quickmenu.components
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import com.nendo.argosy.ui.util.clickableNoFocus
+import com.nendo.argosy.ui.util.focusBorder
+import com.nendo.argosy.ui.util.focusGlow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,15 +25,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.Paint
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.nendo.argosy.ui.quickmenu.QuickMenuOrb
@@ -138,35 +133,8 @@ private fun Orb(
                     scaleX = scale
                     scaleY = scale
                 }
-                .then(
-                    if (glowAlpha > 0f) {
-                        Modifier.drawBehind {
-                            drawIntoCanvas { canvas ->
-                                val paint = Paint().apply {
-                                    color = glowColor.copy(alpha = glowAlpha)
-                                }
-                                val frameworkPaint = paint.asFrameworkPaint().apply {
-                                    maskFilter = android.graphics.BlurMaskFilter(
-                                        16f,
-                                        android.graphics.BlurMaskFilter.Blur.NORMAL
-                                    )
-                                }
-                                val radius = size.minDimension / 2
-                                canvas.nativeCanvas.drawCircle(
-                                    size.width / 2,
-                                    size.height / 2,
-                                    radius + 8f,
-                                    frameworkPaint
-                                )
-                            }
-                        }
-                    } else Modifier
-                )
-                .then(
-                    if (isFocused) {
-                        Modifier.border(Dimens.borderMedium, MaterialTheme.colorScheme.primary, CircleShape)
-                    } else Modifier
-                )
+                .focusGlow(glowColor.copy(alpha = glowAlpha))
+                .focusBorder(isFocused, MaterialTheme.colorScheme.primary, Dimens.borderMedium, CircleShape)
                 .size(ORB_SIZE)
                 .background(backgroundColor, CircleShape)
         ) {
