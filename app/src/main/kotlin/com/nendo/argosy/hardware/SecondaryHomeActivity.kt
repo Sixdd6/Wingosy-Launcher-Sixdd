@@ -531,7 +531,8 @@ class SecondaryHomeActivity :
             downloadQueueDao = dsm.downloadQueueDao,
             displayAffinityHelper = affinityHelper,
             context = applicationContext,
-            preferencesRepository = dsm.preferencesRepository
+            preferencesRepository = dsm.preferencesRepository,
+            repairImageCacheUseCase = dsm.repairImageCacheUseCase
         )
         broadcasts = SecondaryHomeBroadcastHelper(
             dsm = dsm, dualHomeViewModel = dualHomeViewModel,

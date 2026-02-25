@@ -15,7 +15,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import com.nendo.argosy.ui.util.touchOnly
 
 @Composable
@@ -38,7 +37,6 @@ fun DualHomeLowerContent(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val forwardingMode by viewModel.forwardingMode.collectAsState()
-    val context = LocalContext.current
 
     Box(
         modifier = modifier
@@ -59,8 +57,10 @@ fun DualHomeLowerContent(
                     appBarFocused = uiState.focusZone == DualHomeFocusZone.APP_BAR,
                     appBarIndex = uiState.appBarIndex,
                     viewMode = uiState.viewMode,
+                    repairedCoverPaths = uiState.repairedCoverPaths,
                     onGameTapped = { index -> viewModel.setSelectedIndex(index) },
                     onGameSelected = onGameSelected,
+                    onCoverLoadFailed = { gameId, path -> viewModel.repairCoverImage(gameId, path) },
                     onAppClick = onAppClick,
                     onCollectionsClick = onCollectionsClick,
                     onLibraryToggle = onLibraryToggle,
@@ -84,7 +84,9 @@ fun DualHomeLowerContent(
                     columns = uiState.libraryColumns,
                     sectionLabels = emptyList(),
                     currentSectionLabel = "",
+                    repairedCoverPaths = uiState.repairedCoverPaths,
                     onGameTapped = onGridGameTapped,
+                    onCoverLoadFailed = { gameId, path -> viewModel.repairCoverImage(gameId, path) },
                     onSectionClick = {}
                 )
             }
@@ -107,7 +109,9 @@ fun DualHomeLowerContent(
                         platformLabel = uiState.libraryPlatformLabel,
                         showSectionOverlay = uiState.showSectionOverlay,
                         overlaySectionLabel = uiState.overlaySectionLabel,
+                        repairedCoverPaths = uiState.repairedCoverPaths,
                         onGameTapped = onGridGameTapped,
+                        onCoverLoadFailed = { gameId, path -> viewModel.repairCoverImage(gameId, path) },
                         onSectionClick = onLetterClick
                     )
                 }

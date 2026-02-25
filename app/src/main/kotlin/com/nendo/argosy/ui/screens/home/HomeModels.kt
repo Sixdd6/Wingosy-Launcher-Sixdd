@@ -49,7 +49,18 @@ data class HomeGameUi(
     val packageName: String? = null,
     val needsInstall: Boolean = false,
     val youtubeVideoId: String? = null,
-    val isNew: Boolean = false
+    val isNew: Boolean = false,
+    val sortTitle: String = "",
+    val gameModes: String? = null,
+    val franchises: String? = null,
+    val addedAt: Long? = null,
+    val playCount: Int = 0,
+    val playTimeMinutes: Int = 0,
+    val lastPlayedAt: Long? = null,
+    val isPlayable: Boolean = isDownloaded,
+    val description: String? = null,
+    val status: String? = null,
+    val titleId: String? = null
 )
 
 sealed class HomeRowItem {
