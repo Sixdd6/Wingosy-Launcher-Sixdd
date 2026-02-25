@@ -48,7 +48,7 @@ class GamepadInputHandler @Inject constructor(
     preferencesRepository: UserPreferencesRepository
 ) : RawInputInterceptor {
 
-    private val _events = MutableSharedFlow<GamepadEvent>(replay = 1, extraBufferCapacity = 16)
+    private val _events = MutableSharedFlow<GamepadEvent>(extraBufferCapacity = 16)
     private val _homeEvents = Channel<Unit>(Channel.BUFFERED)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -79,6 +79,11 @@ class GamepadInputHandler @Inject constructor(
     fun homeEventFlow(): Flow<Unit> = _homeEvents.receiveAsFlow()
 
     fun injectEvent(event: GamepadEvent) {
+        val currentTime = System.currentTimeMillis()
+        if (currentTime < inputBlockedUntil) return
+        val lastTime = lastInputTimes[event] ?: 0L
+        if (currentTime - lastTime < inputDebounceMs) return
+        lastInputTimes[event] = currentTime
         _events.tryEmit(event)
     }
 

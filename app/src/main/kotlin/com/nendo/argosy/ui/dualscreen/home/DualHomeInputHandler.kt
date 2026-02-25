@@ -310,6 +310,18 @@ class DualHomeInputHandler(
                 if (game != null) onSelectGame(game.id)
                 InputResult.HANDLED
             }
+            com.nendo.argosy.ui.input.GamepadEvent.PrevSection -> {
+                viewModel.cycleLibraryPlatform(-1) {
+                    onBroadcastLibraryGameSelection()
+                }
+                InputResult.HANDLED
+            }
+            com.nendo.argosy.ui.input.GamepadEvent.NextSection -> {
+                viewModel.cycleLibraryPlatform(1) {
+                    onBroadcastLibraryGameSelection()
+                }
+                InputResult.HANDLED
+            }
             com.nendo.argosy.ui.input.GamepadEvent.SecondaryAction -> {
                 viewModel.toggleFilterOverlay()
                 InputResult.HANDLED
