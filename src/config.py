@@ -33,7 +33,7 @@ class ConfigManager:
                 "type": "folder",
                 "path": "",
                 "config_path": str(Path(os.path.expandvars(r'%APPDATA%\eden\config'))),
-                "github": "sudachi-emu/sudachi-emu",
+                "url": "https://github.com/eden-emulator/Releases/releases/download/v0.2.0-rc1/Eden-Windows-v0.2.0-rc1-amd64-msvc-standard.zip",
                 "platform_slug": "switch",
                 "folder": "eden",
                 "portable_trigger": "user"
@@ -53,7 +53,7 @@ class ConfigManager:
                 "ext": "srm",
                 "path": "",
                 "config_path": str(Path(os.path.expandvars(r'%APPDATA%\RetroArch\retroarch.cfg'))),
-                "github": "libretro/RetroArch",
+                "url": "https://buildbot.libretro.com/stable/1.22.2/windows/x86_64/RetroArch.7z",
                 "platform_slug": "multi",
                 "folder": "retroarch"
             },
@@ -63,7 +63,7 @@ class ConfigManager:
                 "ext": "sav",
                 "path": "",
                 "config_path": str(Path.home() / "Documents" / "Dolphin Emulator" / "Config"),
-                "github": "dolphin-emu/dolphin", 
+                "dolphin_latest": True,
                 "platform_slug": "gc",
                 "folder": "dolphin",
                 "portable_trigger": "portable.txt"

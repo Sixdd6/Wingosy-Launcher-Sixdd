@@ -130,8 +130,7 @@ class ArgosyWatcher(QThread):
                 if should_pull:
                     self.pull_server_save(rom_id, title, save_path, is_folder)
                 
-                # IMPORTANT: Track the session even if file doesn't exist yet!
-                # If it doesn't exist, we'll hash it as None and detect creation on exit.
+                # Track the session
                 h = None
                 if os.path.exists(save_path):
                     h = calculate_folder_hash(save_path) if is_folder else calculate_file_hash(save_path)
@@ -240,19 +239,56 @@ class ArgosyWatcher(QThread):
         emu_dir = Path(emu_path).parent
         
         if "Switch" in emu_display_name:
-            title_id = "0100770008DD8000" if "monster hunter" in title.lower() else None
+            # 1. Known Title ID Mapping
+            title_id = None
+            t_lower = title.lower()
+            if "monster hunter rise" in t_lower:
+                title_id = "0100B04011422000"
+            elif "monster hunter generations" in t_lower or "mhgu" in t_lower:
+                title_id = "0100770008DD8000"
+            elif "tears of the kingdom" in t_lower or "totk" in t_lower:
+                title_id = "0100F2C0115B6000"
+            elif "breath of the wild" in t_lower or "botw" in t_lower:
+                title_id = "01007EF00011E000"
+            
+            # 2. Extract from command line if not hardcoded
             if not title_id:
                 m = re.search(r'01[0-9a-f]{14}', full_cmd)
                 if m:
                     title_id = m.group(0).upper()
+            
             if title_id:
-                search_roots = [emu_dir / "user", emu_dir / "data", Path(os.path.expandvars(r'%APPDATA%\yuzu'))]
+                search_roots = [
+                    emu_dir / "user",
+                    emu_dir / "data",
+                    Path(os.path.expandvars(r'%APPDATA%\yuzu')),
+                    Path(os.path.expandvars(r'%APPDATA%\eden')),
+                    Path(os.path.expandvars(r'%APPDATA%\sudachi')),
+                    Path(os.path.expandvars(r'%APPDATA%\ryujinx'))
+                ]
+                
+                # 3. Profile Detection Logic
+                for root in search_roots:
+                    if not root.exists():
+                        continue
+                    
+                    # Search for existing save folders first (Deep Search)
+                    for p in root.rglob(title_id):
+                        if p.is_dir() and "save" in str(p).lower():
+                            return p
+                    
+                    # If not found, try to find the actual User Profile folder
+                    save_base = root / "nand/user/save"
+                    if save_base.exists():
+                        profiles = [d for d in save_base.iterdir() if d.is_dir() and d.name != "0000000000000000"]
+                        if profiles:
+                            profile_id = profiles[0].name
+                            return save_base / "0000000000000000" / profile_id / title_id
+                
+                # 4. Final Fallback
                 for root in search_roots:
                     if root.exists():
-                        for p in root.rglob(title_id):
-                            if p.is_dir() and "save" in str(p).lower():
-                                return p
-                return search_roots[0] / "nand/user/save/0000000000000000/0000000000000000" / title_id
+                        return root / "nand/user/save/0000000000000000/0000000000000000" / title_id
         
         elif "PlayStation 2" in emu_display_name:
             search_paths = [

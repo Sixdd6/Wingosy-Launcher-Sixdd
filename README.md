@@ -14,7 +14,7 @@ Argosy is a lightweight, portable Windows game launcher designed to bridge the g
 
 ## Getting Started
 
-1. Download: Grab the latest Argosy.exe from the Releases page.
+1. Download: Grab the latest Argosy.exe from the [Releases](https://github.com/abduznik/argosy-launcher-win/releases) page.
 2. Setup: On the first run, enter your RomM host URL and credentials.
 3. Configure Paths:
     - Go to the Emulators tab.
@@ -24,22 +24,22 @@ Argosy is a lightweight, portable Windows game launcher designed to bridge the g
 
 ## Supported Emulators
 
-Note: Only PlayStation 2 and Nintendo Switch have been fully tested and verified as stable in the current prototype.
+Note: PlayStation 2, Nintendo Switch, and GameCube/Wii have been fully tested and verified as stable in the current prototype.
 
 - PlayStation 2: PCSX2 (Qt) - Tested
 - Nintendo Switch: Yuzu / Eden / Ryujinx - Tested
-- GameCube / Wii: Dolphin - In Progress
-- Multi-system: RetroArch - In Progress
+- GameCube / Wii: Dolphin - Tested
+- Multi-system: RetroArch - Tested
 - And more... (easily extensible via config.json)
 
 ## Project Roadmap
 
 ### Current Status
-- Tested and Stable: PlayStation 2 (PCSX2), Nintendo Switch (Yuzu/Eden).
-- In Progress: Dolphin (GC/Wii), RetroArch (Multi-system).
+- Tested and Stable: PlayStation 2 (PCSX2), Nintendo Switch (Yuzu/Eden), Dolphin, RetroArch.
+- In Progress: RPCS3 (PS3), Citra (3DS).
 
 ### Planned Features
-- Expanded Emulator Support: Verify and stabilize path resolution for Dolphin, RPCS3, and Citra.
+- Expanded Emulator Support: Verify and stabilize path resolution for RPCS3 and Citra.
 - RetroArch Intelligence: Logic to automatically select/download the correct core based on RomM platform metadata.
 - Conflict Resolution: A simple UI prompt to choose between Keep Local or Use Cloud if both have changed since last sync.
 - System Tray Notifications: Native Windows notifications for sync success, failures, or background tracking status.
@@ -56,14 +56,14 @@ If you want to run or build Argosy manually:
 
 ```powershell
 # Install dependencies
-pip install PySide6 psutil requests py7zr
+pip install PySide6 psutil requests py7zr Pillow
 
 # Run the app
 python main.py
 
-# Build .exe
+# Build .exe with icon
 pip install pyinstaller
-pyinstaller --noconsole --onefile --name Argosy main.py
+pyinstaller --noconsole --onefile --name Argosy --icon "icon.png" --add-data "icon.png;." main.py
 ```
 
 ## License

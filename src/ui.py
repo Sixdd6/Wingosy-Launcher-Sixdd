@@ -5,6 +5,7 @@ import zipfile
 import shutil
 import subprocess
 import time
+import json
 from pathlib import Path
 from PySide6.QtWidgets import (QApplication, QMainWindow, QTextEdit, QVBoxLayout, 
                              QWidget, QLabel, QLineEdit, QPushButton, QFormLayout, 
@@ -23,7 +24,6 @@ except ImportError:
 def get_resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
-        # PyInstaller creates a temp folder and stores path in _MEIPASS
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.abspath(".")
@@ -128,19 +128,118 @@ class ImageFetcher(QThread):
         except:
             pass
 
-class GithubDownloader(QThread):
+class BaseDownloader(QThread):
     progress = Signal(int, float)
     finished = Signal(bool, str)
+    
+    def __init__(self):
+        super().__init__()
+        self.is_cancelled = [False]
+
+    def perform_download(self, url, target_dir):
+        try:
+            name = url.split('/')[-1].split('?')[0]
+            target_path = os.path.join(target_dir, name)
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+            r = requests.get(url, stream=True, timeout=30, headers=headers)
+            r.raise_for_status()
+            
+            total = int(r.headers.get('content-length', 0))
+            downloaded = 0
+            start = time.time()
+            with open(target_path, 'wb') as f:
+                for chunk in r.iter_content(1024*1024):
+                    if self.is_cancelled[0]:
+                        f.close()
+                        os.remove(target_path)
+                        return False, "Cancelled"
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        elapsed = time.time() - start
+                        speed = downloaded / elapsed if elapsed > 0 else 0
+                        self.progress.emit(int((downloaded / total) * 100) if total > 0 else 0, speed)
+            
+            # Extraction logic
+            return self.extract_archive(target_path, target_dir)
+        except Exception as e:
+            return False, str(e)
+
+    def extract_archive(self, file_path, dest_dir):
+        try:
+            if file_path.endswith('.zip'):
+                with zipfile.ZipFile(file_path, 'r') as z:
+                    z.extractall(dest_dir)
+                os.remove(file_path)
+                return True, dest_dir
+            elif file_path.endswith('.7z'):
+                extracted = False
+                if HAS_PY7ZR:
+                    try:
+                        with py7zr.SevenZipFile(file_path, mode='r') as z:
+                            z.extractall(path=dest_dir)
+                        extracted = True
+                    except: pass
+                
+                if not extracted:
+                    # Try system tar (Windows 10/11 has it built-in and supports .7z usually)
+                    try:
+                        subprocess.run(['tar', '-xf', file_path, '-C', dest_dir], check=True)
+                        extracted = True
+                    except: pass
+                
+                if extracted:
+                    os.remove(file_path)
+                    return True, dest_dir
+                else:
+                    return True, file_path + " (Download complete, but extraction failed. Please extract manually.)"
+            return True, file_path
+        except Exception as e:
+            return True, file_path + f" (Extraction failed: {e})"
+
+class DirectDownloader(BaseDownloader):
+    def __init__(self, url, target_dir):
+        super().__init__()
+        self.url = url
+        self.target_dir = target_dir
+    def run(self):
+        ok, msg = self.perform_download(self.url, self.target_dir)
+        self.finished.emit(ok, msg)
+
+class DolphinDownloader(BaseDownloader):
+    def __init__(self, target_dir):
+        super().__init__()
+        self.target_dir = target_dir
+    def run(self):
+        try:
+            api_url = "https://dolphin-emu.org/download/list/master/1/?format=json"
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+            resp = requests.get(api_url, timeout=15, headers=headers)
+            if resp.status_code != 200:
+                # Fallback to a hardcoded version if API fails
+                download_url = "https://dl.dolphin-emu.org/releases/2512/dolphin-2512-x64.7z"
+            else:
+                data = resp.json()
+                download_url = data['builds'][0]['artifacts']['win-x64']['url']
+            
+            ok, msg = self.perform_download(download_url, self.target_dir)
+            self.finished.emit(ok, msg)
+        except Exception as e:
+            # Final fallback
+            download_url = "https://dl.dolphin-emu.org/releases/2512/dolphin-2512-x64.7z"
+            ok, msg = self.perform_download(download_url, self.target_dir)
+            self.finished.emit(ok, msg)
+
+class GithubDownloader(BaseDownloader):
     def __init__(self, repo, target_dir):
         super().__init__()
         self.repo = repo
         self.target_dir = target_dir
-        self.is_cancelled = [False]
     def run(self):
         try:
-            print(f"[DEBUG] Fetching latest release for {self.repo}...")
             api_url = f"https://api.github.com/repos/{self.repo}/releases/latest"
-            resp_obj = requests.get(api_url, timeout=15)
+            headers = {'User-Agent': 'ArgosyLauncher'}
+            resp_obj = requests.get(api_url, timeout=15, headers=headers)
             if resp_obj.status_code != 200:
                 self.finished.emit(False, f"Repo {self.repo} not found.")
                 return
@@ -173,45 +272,9 @@ class GithubDownloader(QThread):
                 self.finished.emit(False, "No suitable release file found.")
                 return
             
-            target_path = os.path.join(self.target_dir, asset['name'])
-            r = requests.get(asset['browser_download_url'], stream=True, timeout=30)
-            total = int(r.headers.get('content-length', 0))
-            downloaded = 0
-            start = time.time()
-            with open(target_path, 'wb') as f:
-                for chunk in r.iter_content(1024*1024):
-                    if self.is_cancelled[0]:
-                        f.close()
-                        os.remove(target_path)
-                        return
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        elapsed = time.time() - start
-                        speed = downloaded / elapsed if elapsed > 0 else 0
-                        self.progress.emit(int((downloaded / total) * 100) if total > 0 else 0, speed)
-            
-            print(f"[DEBUG] Download finished. Attempting extraction...")
-            try:
-                if target_path.endswith('.zip'):
-                    with zipfile.ZipFile(target_path, 'r') as z:
-                        z.extractall(self.target_dir)
-                    os.remove(target_path)
-                elif target_path.endswith('.7z'):
-                    if HAS_PY7ZR:
-                        with py7zr.SevenZipFile(target_path, mode='r') as z:
-                            z.extractall(path=self.target_dir)
-                        os.remove(target_path)
-                    else:
-                        subprocess.run(['tar', '-xf', target_path, '-C', self.target_dir], check=True)
-                        os.remove(target_path)
-            except Exception as e:
-                self.finished.emit(True, target_path + f" (Manual extraction required: {e})")
-                return
-
-            self.finished.emit(True, self.target_dir)
+            ok, msg = self.perform_download(asset['browser_download_url'], self.target_dir)
+            self.finished.emit(ok, msg)
         except Exception as e:
-            print(f"[DEBUG] Exception in GithubDownloader: {e}")
             self.finished.emit(False, str(e))
 
 class RomDownloader(QThread):
@@ -252,11 +315,11 @@ class BiosDownloader(QThread):
             try:
                 dest = os.path.dirname(self.target_path)
                 if self.target_path.endswith('.zip'):
-                    with zipfile.ZipFile(target_path, 'r') as z:
+                    with zipfile.ZipFile(self.target_path, 'r') as z:
                         z.extractall(dest)
                     os.remove(self.target_path)
                 elif self.target_path.endswith('.7z') and HAS_PY7ZR:
-                    with py7zr.SevenZipFile(target_path, mode='r') as z:
+                    with py7zr.SevenZipFile(self.target_path, mode='r') as z:
                         z.extractall(path=dest)
                     os.remove(self.target_path)
             except:
@@ -350,7 +413,6 @@ class GameDetailDialog(QDialog):
         base_rom = self.config.get("base_rom_path")
         rom_name = self.game.get('fs_name')
         
-        # Robust ROM search
         local_rom = Path(base_rom) / platform / rom_name
         if not local_rom.exists():
             local_rom = Path(base_rom) / rom_name
@@ -368,7 +430,7 @@ class GameDetailDialog(QDialog):
         emu_data = None
         emu_display_name = None
         
-        # Check for preferred emulator for this platform
+        # Check for preferred emulator
         preferred = self.config.get("preferred_emulators", {}).get(platform)
         if preferred:
             data = self.config.get("emulators").get(preferred)
@@ -398,7 +460,6 @@ class GameDetailDialog(QDialog):
         if save_path:
             self.main_window.watcher.skip_next_pull_rom_id = str(self.game['id'])
             is_folder = os.path.isdir(save_path) if os.path.exists(save_path) else False
-            # Force pull from server regardless of cache in Play mode
             self.main_window.watcher.pull_server_save(self.game['id'], self.game.get('name'), save_path, is_folder, force=True)
         
         try:
@@ -730,17 +791,27 @@ class ArgosyMainWindow(QMainWindow):
 
     def dl_emu(self, n):
         emu_data = self.config.get("emulators")[n]
+        url = emu_data.get("url")
         repo = emu_data.get("github")
-        if not repo:
-            return
+        is_dolphin = emu_data.get("dolphin_latest", False)
+        
         target_dir = Path(self.config.get("base_emu_path")) / emu_data.get("folder")
         os.makedirs(target_dir, exist_ok=True)
         self.log(f"🚀 Downloading {n}...")
-        gh_dl = GithubDownloader(repo, str(target_dir))
-        gh_dl.progress.connect(lambda p, s: self.log(f"DL {n}: {p}% @ {format_speed(s)}"))
-        gh_dl.finished.connect(lambda ok, p: self.post_dl_emu(n, ok, p, gh_dl))
-        self.active_threads.append(gh_dl)
-        gh_dl.start()
+        
+        if is_dolphin:
+            dl_thread = DolphinDownloader(str(target_dir))
+        elif url:
+            dl_thread = DirectDownloader(url, str(target_dir))
+        elif repo:
+            dl_thread = GithubDownloader(repo, str(target_dir))
+        else:
+            return
+            
+        dl_thread.progress.connect(lambda p, s: self.log(f"DL {n}: {p}% @ {format_speed(s)}"))
+        dl_thread.finished.connect(lambda ok, p: self.post_dl_emu(n, ok, p, dl_thread))
+        self.active_threads.append(dl_thread)
+        dl_thread.start()
 
     def post_dl_emu(self, n, ok, p, thread):
         if ok:
