@@ -13,6 +13,9 @@ class ConfigManager:
         "device_id": "argosy-win-default",
         "base_rom_path": str(Path.home() / "Games" / "ROMs"),
         "base_emu_path": str(Path.home() / "Games" / "Emulators"),
+        "preferred_emulators": {
+            "switch": "Switch (Eden)"
+        },
         "emulators": {
             "Switch (Yuzu)": {
                 "exe": "yuzu.exe", 
@@ -20,17 +23,17 @@ class ConfigManager:
                 "title_id_regex": r"01[0-9a-f]{14}",
                 "path": "",
                 "config_path": str(Path(os.path.expandvars(r'%APPDATA%\yuzu\config'))),
-                "github": "pineapple-emu/pineapple-src", # Updated
+                "github": "pineapple-emu/pineapple-src",
                 "platform_slug": "switch",
                 "folder": "yuzu",
-                "portable_trigger": "user" # Folder name
+                "portable_trigger": "user"
             },
             "Switch (Eden)": {
                 "exe": "eden.exe",
                 "type": "folder",
                 "path": "",
                 "config_path": str(Path(os.path.expandvars(r'%APPDATA%\eden\config'))),
-                "github": "sudachi-emu/sudachi-emu", # Updated
+                "github": "sudachi-emu/sudachi-emu",
                 "platform_slug": "switch",
                 "folder": "eden",
                 "portable_trigger": "user"
@@ -63,7 +66,7 @@ class ConfigManager:
                 "github": "dolphin-emu/dolphin", 
                 "platform_slug": "gc",
                 "folder": "dolphin",
-                "portable_trigger": "portable.txt" # File name
+                "portable_trigger": "portable.txt"
             },
             "PlayStation 2": {
                 "exe": "pcsx2-qt.exe", 

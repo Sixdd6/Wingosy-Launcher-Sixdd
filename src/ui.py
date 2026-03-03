@@ -66,7 +66,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.config = config_manager
         self.main_window = main_window
-        self.resize(350, 250)
+        self.resize(400, 350)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(f"<b>RomM Host:</b> {self.config.get('host')}"))
         layout.addWidget(QLabel(f"<b>User:</b> {self.config.get('username')}"))
@@ -76,6 +76,15 @@ class SettingsDialog(QDialog):
         self.auto_pull_btn.setChecked(self.config.get("auto_pull_saves", True))
         self.auto_pull_btn.toggled.connect(self.toggle_auto_pull)
         layout.addWidget(self.auto_pull_btn)
+        
+        layout.addWidget(QLabel("<b>Preferred Switch Emulator:</b>"))
+        self.switch_pref = QComboBox()
+        self.switch_pref.addItems(["Switch (Eden)", "Switch (Yuzu)"])
+        prefs = self.config.get("preferred_emulators", {})
+        current = prefs.get("switch", "Switch (Eden)")
+        self.switch_pref.setCurrentText(current)
+        self.switch_pref.currentTextChanged.connect(self.set_switch_pref)
+        layout.addWidget(self.switch_pref)
         
         layout.addStretch()
         
@@ -91,6 +100,11 @@ class SettingsDialog(QDialog):
     def toggle_auto_pull(self, checked):
         self.config.set("auto_pull_saves", checked)
         self.auto_pull_btn.setText("Auto Pull Saves: ON" if checked else "Auto Pull Saves: OFF")
+
+    def set_switch_pref(self, val):
+        prefs = self.config.get("preferred_emulators", {})
+        prefs["switch"] = val
+        self.config.set("preferred_emulators", prefs)
 
     def do_logout(self):
         self.config.set("token", None)
@@ -238,11 +252,11 @@ class BiosDownloader(QThread):
             try:
                 dest = os.path.dirname(self.target_path)
                 if self.target_path.endswith('.zip'):
-                    with zipfile.ZipFile(self.target_path, 'r') as z:
+                    with zipfile.ZipFile(target_path, 'r') as z:
                         z.extractall(dest)
                     os.remove(self.target_path)
                 elif self.target_path.endswith('.7z') and HAS_PY7ZR:
-                    with py7zr.SevenZipFile(self.target_path, mode='r') as z:
+                    with py7zr.SevenZipFile(target_path, mode='r') as z:
                         z.extractall(path=dest)
                     os.remove(self.target_path)
             except:
@@ -336,6 +350,7 @@ class GameDetailDialog(QDialog):
         base_rom = self.config.get("base_rom_path")
         rom_name = self.game.get('fs_name')
         
+        # Robust ROM search
         local_rom = Path(base_rom) / platform / rom_name
         if not local_rom.exists():
             local_rom = Path(base_rom) / rom_name
@@ -352,12 +367,23 @@ class GameDetailDialog(QDialog):
 
         emu_data = None
         emu_display_name = None
-        for name, data in self.config.get("emulators").items():
-            if data.get("platform_slug") == platform or (platform in ["gc", "wii"] and name == "GameCube / Wii"):
-                if data.get("path") and os.path.exists(data.get("path")):
-                    emu_data = data
-                    emu_display_name = name
-                    break
+        
+        # Check for preferred emulator for this platform
+        preferred = self.config.get("preferred_emulators", {}).get(platform)
+        if preferred:
+            data = self.config.get("emulators").get(preferred)
+            if data and data.get("path") and os.path.exists(data.get("path")):
+                emu_data = data
+                emu_display_name = preferred
+        
+        # Fallback to first available emulator for platform
+        if not emu_data:
+            for name, data in self.config.get("emulators").items():
+                if data.get("platform_slug") == platform or (platform in ["gc", "wii"] and name == "GameCube / Wii"):
+                    if data.get("path") and os.path.exists(data.get("path")):
+                        emu_data = data
+                        emu_display_name = name
+                        break
         
         if not emu_data:
             QMessageBox.warning(self, "Emulator Not Set", f"No emulator path set for {platform}.")
