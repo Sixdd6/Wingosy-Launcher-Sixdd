@@ -20,6 +20,15 @@ try:
 except ImportError:
     HAS_PY7ZR = False
 
+def get_resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
 def format_speed(bytes_per_sec):
     if bytes_per_sec > 1024*1024:
         return f"{bytes_per_sec/(1024*1024):.1f} MB/s"
@@ -248,7 +257,7 @@ class GameCard(QWidget):
         self.setFixedSize(160, 240)
         self.setStyleSheet("""
             QWidget { background: #1e1e1e; border-radius: 8px; }
-            QWidget:hover { background: #2c2c2c; border: 2px solid #2e7d32; }
+            QWidget:hover { background: #2c2c2c; border: 2px solid #1565c0; }
         """)
         l = QVBoxLayout(self)
         self.img = QLabel()
@@ -293,13 +302,13 @@ class GameDetailDialog(QDialog):
         
         # PLAY BUTTON
         self.play_btn = QPushButton("▶ PLAY")
-        self.play_btn.setStyleSheet("background: #00e676; color: black; font-weight: bold; padding: 10px; font-size: 14pt;")
+        self.play_btn.setStyleSheet("background: #2196f3; color: white; font-weight: bold; padding: 10px; font-size: 14pt;")
         self.play_btn.clicked.connect(self.play_game)
         dt.addWidget(self.play_btn)
 
         files = game.get('files', [])
         self.dl_btn = QPushButton("Download ROM")
-        self.dl_btn.setStyleSheet("background: #2e7d32; color: white; padding: 8px;")
+        self.dl_btn.setStyleSheet("background: #1565c0; color: white; padding: 8px;")
         self.dl_btn.setVisible(len(files) > 0)
         self.dl_btn.clicked.connect(lambda: self.download_rom(files[0]))
         dt.addWidget(self.dl_btn)
@@ -327,7 +336,6 @@ class GameDetailDialog(QDialog):
         base_rom = self.config.get("base_rom_path")
         rom_name = self.game.get('fs_name')
         
-        # Robust ROM search
         local_rom = Path(base_rom) / platform / rom_name
         if not local_rom.exists():
             local_rom = Path(base_rom) / rom_name
@@ -413,6 +421,12 @@ class ArgosyMainWindow(QMainWindow):
         self.all_games = []
         self.setWindowTitle("Argosy Desktop Launcher")
         self.resize(1100, 800)
+        
+        # Set Application Icon
+        icon_path = get_resource_path("icon.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+            
         self.setup_ui()
         self.setup_tray()
         # Enable tracking by default on startup
@@ -423,11 +437,11 @@ class ArgosyMainWindow(QMainWindow):
         self.setCentralWidget(c)
         l = QVBoxLayout(c)
         h = QHBoxLayout()
-        h.addWidget(QLabel("<h1 style='color: #00e676;'>Argosy Launcher</h1>"))
+        h.addWidget(QLabel("<h1 style='color: #2196f3;'>Argosy Launcher</h1>"))
         h.addStretch()
         self.tr_btn = QPushButton("START TRACKING")
         self.tr_btn.setFixedSize(150, 35)
-        self.tr_btn.setStyleSheet("background: #2e7d32; color: white; font-weight: bold;")
+        self.tr_btn.setStyleSheet("background: #1565c0; color: white; font-weight: bold;")
         self.tr_btn.clicked.connect(self.toggle_tr)
         h.addWidget(self.tr_btn)
         self.st_btn = QPushButton("⚙️ Settings")
@@ -435,6 +449,7 @@ class ArgosyMainWindow(QMainWindow):
         h.addWidget(self.st_btn)
         l.addLayout(h)
         
+        # Library Filtering UI
         filter_l = QHBoxLayout()
         filter_l.addWidget(QLabel("Search:"))
         self.search_in = QLineEdit()
@@ -452,7 +467,7 @@ class ArgosyMainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet("""
             QTabBar::tab { background: #2d2d2d; color: white; padding: 10px; }
-            QTabBar::tab:selected { background: #1e1e1e; border-bottom: 2px solid #00e676; }
+            QTabBar::tab:selected { background: #1e1e1e; border-bottom: 2px solid #2196f3; }
         """)
         
         self.gw = QWidget()
@@ -496,7 +511,7 @@ class ArgosyMainWindow(QMainWindow):
         self.tabs.addTab(self.et, "🛠️ Emulators")
         self.la = QTextEdit()
         self.la.setReadOnly(True)
-        self.la.setStyleSheet("background: #121212; color: #00ff00; font-family: Consolas;")
+        self.la.setStyleSheet("background: #121212; color: #42a5f5; font-family: Consolas;")
         self.tabs.addTab(self.la, "📝 Logs")
         l.addWidget(self.tabs)
         self.pop_lib()
@@ -505,6 +520,7 @@ class ArgosyMainWindow(QMainWindow):
     def apply_filters(self):
         txt = self.search_in.text().lower()
         plat = self.plat_filter.currentText()
+        
         filtered = []
         for g in self.all_games:
             name_match = txt in g.get('name', '').lower() or txt in g.get('fs_name', '').lower()
@@ -518,6 +534,7 @@ class ArgosyMainWindow(QMainWindow):
         if d:
             le.setText(d)
             self.config.set(k, d)
+
     def sv_p(self):
         self.config.set("base_rom_path", self.rp.text())
         self.config.set("base_emu_path", self.ep.text())
@@ -564,21 +581,27 @@ class ArgosyMainWindow(QMainWindow):
             p_lbl = QLabel(d.get("path") or "Not Set")
             p_lbl.setStyleSheet("color: #888;")
             rl.addWidget(p_lbl, 1)
+            
             btn_dl = QPushButton("⬇️ Latest")
             btn_dl.clicked.connect(lambda checked, name=n: self.dl_emu(name))
             rl.addWidget(btn_dl)
+            
             btn_fw = QPushButton("📂 Firmware")
             btn_fw.clicked.connect(lambda checked, name=n: self.open_fw(name))
             rl.addWidget(btn_fw)
+            
             btn_p = QPushButton("Path")
             btn_p.clicked.connect(lambda checked, name=n: self.st_ep(name))
             rl.addWidget(btn_p)
+            
             btn_ex = QPushButton("📤 Export")
             btn_ex.clicked.connect(lambda checked, name=n: self.sy_ec(name, "export"))
             rl.addWidget(btn_ex)
+            
             btn_im = QPushButton("📥 Import")
             btn_im.clicked.connect(lambda checked, name=n: self.sy_ec(name, "import"))
             rl.addWidget(btn_im)
+            
             self.emu_list_layout.addWidget(row)
 
     def open_fw(self, emu_name):
@@ -631,7 +654,7 @@ class ArgosyMainWindow(QMainWindow):
                     gl = QVBoxLayout(group)
                     group.setStyleSheet("background: #333; border-radius: 5px; margin: 5px;")
                     gl.addWidget(QLabel(f"<b>{p_name} ({len(files)} files)</b>"))
-                    db = QPushButton(f"Download Full Set")
+                    db = QPushButton("Download Full Set")
                     db.clicked.connect(lambda checked, f_list=files: self.dl_fw_list(emu_name, f_list, dlg))
                     gl.addWidget(db)
                     self.fw_list_layout.addWidget(group)
@@ -786,12 +809,19 @@ class ArgosyMainWindow(QMainWindow):
             self.watcher.wait()
             self.watcher = None
             self.tr_btn.setText("START TRACKING")
-            self.tr_btn.setStyleSheet("background: #2e7d32; color: white;")
+            self.tr_btn.setStyleSheet("background: #1565c0; color: white;")
 
     def setup_tray(self):
-        px = QPixmap(32, 32)
-        px.fill(QColor("#2e7d32"))
-        self.ti = QSystemTrayIcon(QIcon(px), self)
+        # Create a tray icon using the app icon if possible
+        icon_path = get_resource_path("icon.png")
+        if os.path.exists(icon_path):
+            icon = QIcon(icon_path)
+        else:
+            px = QPixmap(32, 32)
+            px.fill(QColor("#1565c0"))
+            icon = QIcon(px)
+            
+        self.ti = QSystemTrayIcon(icon, self)
         menu = QMenu()
         menu.addAction("Show", self.showNormal)
         menu.addAction("Exit", QApplication.instance().quit)

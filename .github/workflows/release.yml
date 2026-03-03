@@ -1,4 +1,4 @@
-﻿name: Build and Release
+name: Build and Release
 
 on:
   push:
@@ -23,7 +23,9 @@ jobs:
           
       - name: Build EXE
         run: |
-          pyinstaller --noconsole --onefile --name Argosy main.py
+          # --add-data "icon.png;." adds the icon to the bundled resources
+          # --icon "icon.png" sets the file icon for the EXE
+          pyinstaller --noconsole --onefile --name Argosy --icon "icon.png" --add-data "icon.png;." main.py
           
       - name: Release
         uses: softprops/action-gh-release@v2
