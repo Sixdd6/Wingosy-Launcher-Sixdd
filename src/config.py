@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from pathlib import Path
 
 class ConfigManager:
@@ -85,6 +86,20 @@ class ConfigManager:
     def __init__(self):
         self.config_dir = Path.home() / ".wingosy"
         self.config_file = self.config_dir / "config.json"
+        
+        # MIGRATION LOGIC
+        old_dir = Path.home() / ".argosy"
+        if old_dir.exists():
+            # If .wingosy doesn't exist OR it's just a fresh empty folder (no config.json)
+            if not self.config_dir.exists() or not self.config_file.exists():
+                try:
+                    if self.config_dir.exists():
+                        shutil.rmtree(self.config_dir)
+                    shutil.copytree(old_dir, self.config_dir)
+                    print(f"Successfully migrated data from {old_dir} to {self.config_dir}")
+                except Exception as e:
+                    print(f"Migration error: {e}")
+
         self.data = self.DEFAULT_CONFIG.copy()
         self.load()
 
@@ -96,8 +111,11 @@ class ConfigManager:
                     for k, v in loaded_data.items():
                         if k != "emulators":
                             self.data[k] = v
+                    
+                    # Smart Merge Emulators
                     loaded_emus = loaded_data.get("emulators", {})
                     for name, new_data in self.DEFAULT_CONFIG["emulators"].items():
+                        # Try to find user's custom path from any previous version of this emulator
                         for old_name, old_data in loaded_emus.items():
                             if old_data.get("exe") == new_data["exe"]:
                                 new_data["path"] = old_data.get("path", "")
