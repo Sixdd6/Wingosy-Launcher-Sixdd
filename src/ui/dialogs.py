@@ -515,7 +515,12 @@ class GameDetailDialog(QDialog):
 
                 watcher.skip_next_pull_rom_id = str(rom_id)
 
-            proc = subprocess.Popen(args)
+            # Create a clean environment for the emulator (remove Wingosy's Qt variables)
+            clean_env = os.environ.copy()
+            for key in ["QT_QPA_PLATFORM_PLUGIN_PATH", "QT_PLUGIN_PATH", "QT_QPA_FONTDIR", "QT_QPA_PLATFORM", "QT_STYLE_OVERRIDE"]:
+                clean_env.pop(key, None)
+
+            proc = subprocess.Popen(args, env=clean_env)
             self.main_window.log(f"🚀 Launched {emu_data['exe']} with {rom_name} (PID: {proc.pid})")
             
             if self.main_window.watcher:
