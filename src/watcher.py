@@ -76,7 +76,7 @@ class WingosyWatcher(QThread):
         """
         try:
             pid = proc.pid
-            full_cmd = f"\"{emu_path}\" \"{local_rom_path}\"".lower()
+            full_cmd = f"\"{emu_path}\" \"{local_rom_path}\""
             rom_id = game_data['id']
             title = game_data['name']
             platform = game_data.get('platform_slug')
@@ -84,10 +84,6 @@ class WingosyWatcher(QThread):
             # 1. Resolve Save Path
             save_path = self.resolve_save_path(emu_display_name, title, full_cmd, emu_path, platform, proc=psutil.Process(pid))
             
-            if not save_path:
-                # Retry immediately once
-                save_path = self.resolve_save_path(emu_display_name, title, full_cmd, emu_path, platform, proc=psutil.Process(pid))
-
             if save_path:
                 save_path = str(Path(save_path).resolve())
                 is_folder = platform in ["switch", "ps3", "wii"]
@@ -382,7 +378,9 @@ class WingosyWatcher(QThread):
             # 2. GAMECUBE / WII / NGC (DOLPHIN)
             elif "Dolphin" in emu_display_name or platform in ["gc", "wii", "ngc", "gamecube", "nintendo-gamecube", "ngc"]:
                 user_dir = Path.home() / "Documents" / "Dolphin Emulator"
-                if (emu_dir / "portable.txt").exists() or (emu_dir / "User").exists(): 
+                if (emu_dir / "portable.txt").exists():
+                    user_dir = emu_dir / "User"
+                elif (emu_dir / "User").exists():
                     user_dir = emu_dir / "User"
                 
                 game_id = None

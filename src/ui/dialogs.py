@@ -425,7 +425,7 @@ class GameDetailDialog(QDialog):
             watcher = self.main_window.watcher
             rom_id = self.game['id']
             title = self.game['name']
-            full_cmd = f"\"{emu_data['path']}\" \"{local_rom}\"".lower()
+            full_cmd = f"\"{emu_data['path']}\" \"{local_rom}\""
             save_path = watcher.resolve_save_path(emu_display_name, title, full_cmd, emu_data['path'], platform)
             
             if save_path:
@@ -443,7 +443,10 @@ class GameDetailDialog(QDialog):
                         conflict_captured.append((t, lp, td, rid))
                         loop.quit()
 
-                watcher.conflict_signal.disconnect(self.main_window.handle_conflict)
+                try:
+                    watcher.conflict_signal.disconnect(self.main_window.handle_conflict)
+                except RuntimeError:
+                    pass
                 watcher.conflict_signal.connect(on_conflict)
 
                 class PreLaunchSyncWorker(QThread):
@@ -513,7 +516,7 @@ class GameDetailDialog(QDialog):
                             except: pass
                         return
 
-                watcher.skip_next_pull_rom_id = str(rom_id)
+            watcher.skip_next_pull_rom_id = str(rom_id)
 
             # Create a clean environment for the emulator (remove Wingosy's Qt variables)
             clean_env = os.environ.copy()
