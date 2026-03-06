@@ -20,6 +20,15 @@ from src.ui.tabs.library import LibraryTab
 from src.ui.tabs.emulators import EmulatorsTab
 from src.utils import zip_path
 
+class LibraryFetchThread(QThread):
+    finished = Signal(object)  # emits the result (list or "REAUTH_REQUIRED")
+    def __init__(self, client):
+        super().__init__()
+        self.client = client
+    def run(self):
+        result = self.client.fetch_library()
+        self.finished.emit(result)
+
 class WingosyMainWindow(QMainWindow):
     def __init__(self, config_manager, client, watcher_class, version):
         super().__init__()
@@ -109,34 +118,40 @@ class WingosyMainWindow(QMainWindow):
                 self.active_image_fetchers.append(new_fetcher)
 
     def fetch_library_and_populate(self):
-        try:
-            res = self.client.fetch_library()
-            if res == "REAUTH_REQUIRED":
-                QMessageBox.warning(self, "Session Expired", "Your session has expired. Please log in again.")
-                self.open_settings()
-                return
-            
-            if res != "REAUTH_REQUIRED" and not isinstance(res, list):
-                self.log("❌ Unexpected response from server. Check your RomM version.")
-                self._show_empty_library_message("Could not load library. Check logs.")
-                return
-                
-            self.all_games = res
-            if isinstance(res, list) and len(res) == 0:
-                self._show_empty_library_message("No games found. Check your RomM library or platform filter.")
-                return
+        self.library_tab.refresh_btn.setEnabled(False)
+        self.library_tab.retry_btn.setVisible(False)
+        self.log("🔄 Loading library...")
+        self._fetch_thread = LibraryFetchThread(self.client)
+        self._fetch_thread.finished.connect(self._on_library_fetched)
+        self._fetch_thread.start()
 
-            platforms = sorted(list(set(g.get('platform_display_name') for g in self.all_games if g.get('platform_display_name'))))
-            
-            self.library_tab.platform_filter.blockSignals(True)
-            self.library_tab.platform_filter.clear()
-            self.library_tab.platform_filter.addItem("All Platforms")
-            self.library_tab.platform_filter.addItems(platforms)
-            self.library_tab.platform_filter.blockSignals(False)
-            
-            self.library_tab.populate_grid(self.all_games)
-        except Exception as e:
-            self.log(f"❌ Error fetching library: {e}")
+    def _on_library_fetched(self, res):
+        self.library_tab.refresh_btn.setEnabled(True)
+        if res == "REAUTH_REQUIRED":
+            QMessageBox.warning(self, "Session Expired", 
+                "Your session has expired. Please log in again.")
+            self.open_settings()
+            return
+        if not isinstance(res, list):
+            self.log("❌ Unexpected response from server. Check your RomM version.")
+            self._show_empty_library_message("Could not load library. Check logs.")
+            return
+        self.all_games = res
+        if len(res) == 0:
+            self._show_empty_library_message(
+                "No games found. Check your RomM library or platform filter.")
+            return
+        platforms = sorted(list(set(
+            g.get('platform_display_name') for g in self.all_games 
+            if g.get('platform_display_name')
+        )))
+        self.library_tab.platform_filter.blockSignals(True)
+        self.library_tab.platform_filter.clear()
+        self.library_tab.platform_filter.addItem("All Platforms")
+        self.library_tab.platform_filter.addItems(platforms)
+        self.library_tab.platform_filter.blockSignals(False)
+        self.library_tab.populate_grid(self.all_games)
+        self.log(f"✅ Library loaded: {len(res)} games")
 
     def _show_empty_library_message(self, message):
         self.library_tab.show_empty_message(message)
