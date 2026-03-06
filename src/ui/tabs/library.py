@@ -52,6 +52,22 @@ class GameCard(QWidget):
             self.local_indicator.move(4, 4)
             self.local_indicator.show()
         
+        has_cloud_save = str(game.get('id', '')) in sync_cache
+        if has_cloud_save:
+            self.cloud_indicator = QLabel("☁", self)
+            self.cloud_indicator.setStyleSheet("""
+                color: white;
+                background-color: #1565c0;
+                border-radius: 7px;
+                font-size: 9px;
+                font-weight: bold;
+                padding: 1px 3px;
+            """)
+            self.cloud_indicator.setFixedSize(14, 14)
+            self.cloud_indicator.setAlignment(Qt.AlignCenter)
+            self.cloud_indicator.move(22, 4)
+            self.cloud_indicator.show()
+        
         self.title_label = QLabel()
         self.title_label.setAlignment(Qt.AlignCenter)
         self.title_label.setStyleSheet("color: white; font-weight: bold; border: none;")
