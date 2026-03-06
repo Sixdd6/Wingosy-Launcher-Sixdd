@@ -254,7 +254,24 @@ class SettingsDialog(QDialog):
         if success:
             QMessageBox.information(self, "Update Complete", "Update downloaded! Click OK to restart Wingosy.")
             current_exe = Path(sys.executable).resolve()
-            subprocess.Popen([str(current_exe)])
+            pid = os.getpid()
+            bat_path = current_exe.parent / "_wingosy_restart.bat"
+            bat_content = (
+                f'@echo off\n'
+                f':wait\n'
+                f'tasklist /FI "PID eq {pid}" 2>NUL | find /I "{pid}" >NUL\n'
+                f'if not errorlevel 1 (\n'
+                f'    timeout /t 1 /nobreak >NUL\n'
+                f'    goto wait\n'
+                f')\n'
+                f'start "" "{current_exe}"\n'
+                f'del "%~f0"\n'
+            )
+            bat_path.write_text(bat_content)
+            subprocess.Popen(
+                ['cmd.exe', '/c', str(bat_path)],
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
             QApplication.instance().quit()
         else:
             QMessageBox.critical(self, "Update Failed", f"Could not replace the current file. Please download manually.\nError: {message}")
