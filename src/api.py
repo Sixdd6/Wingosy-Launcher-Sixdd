@@ -138,62 +138,88 @@ class RomMClient:
             h["Authorization"] = f"Bearer {self.token}"
         return h
 
-    def fetch_library(self, retry_callback=None):
+    def fetch_library(self, retry_callback=None, page_callback=None):
+        """
+        Fetch all games from RomM in parallel for speed.
+        Emits pages progressively via page_callback if provided.
+        """
+        import concurrent.futures
         url = f"{self.host}/api/roms"
+        limit = 100 # Increased from 50 to halve request count
         all_items = []
-        limit = 50
-        offset = 0
-        total = None
+        
+        # Use a session for connection pooling
+        session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
 
-        while True:
+        # 1. Fetch first page to get total count
+        def _fetch_page(offset, retry=True):
             params = {"limit": limit, "offset": offset}
             try:
                 try:
                     # Stage 1: Fast attempt
-                    r = requests.get(url, headers=self.get_auth_headers(),
+                    r = session.get(url, headers=self.get_auth_headers(),
                                     params=params, timeout=REQUEST_TIMEOUT, verify=CERTIFI_PATH)
                 except requests.exceptions.Timeout:
                     # Stage 2: Slow attempt
                     if retry_callback:
                         retry_callback()
-                    r = requests.get(url, headers=self.get_auth_headers(),
+                    r = session.get(url, headers=self.get_auth_headers(),
                                     params=params, timeout=(300, 300), verify=CERTIFI_PATH)
-            except (requests.exceptions.ConnectTimeout,
-                    requests.exceptions.ConnectionError,
-                    requests.exceptions.Timeout,
-                    requests.exceptions.RequestException) as e:
-                print(f"[API] Network error in fetch_library: {e}")
+                
+                if r.status_code == 401:
+                    return "REAUTH_REQUIRED"
+                if r.status_code != 200:
+                    return []
+                
+                data = r.json()
+                items = (data.get("items", []) if isinstance(data, dict)
+                         else data if isinstance(data, list) else [])
+                total = (data.get("total") or data.get("count") or 0
+                         if isinstance(data, dict) else len(items))
+                return {"items": items, "total": total}
+            except Exception as e:
+                if retry:
+                    print(f"[API] Retry page offset {offset} due to error: {e}")
+                    return _fetch_page(offset, retry=False)
+                print(f"[API] Network error at offset {offset}: {e}")
                 return None
 
-            if r.status_code == 401:
-                return "REAUTH_REQUIRED"
-            if r.status_code != 200:
-                break
+        first_page = _fetch_page(0)
+        if first_page is None:
+            return None
+        if first_page == "REAUTH_REQUIRED":
+            return "REAUTH_REQUIRED"
+        
+        items = first_page["items"]
+        total = first_page["total"]
+        all_items.extend(items)
+        if page_callback:
+            page_callback(items, total)
 
-            data = r.json()
-            items = (data.get("items", []) if isinstance(data, dict)
-                     else data if isinstance(data, list) else [])
+        if total > limit:
+            remaining_offsets = list(range(limit, total, limit))
+            print(f"[Library] Parallel fetch started for {len(remaining_offsets)} remaining pages...")
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_offset = {executor.submit(_fetch_page, offset): offset for offset in remaining_offsets}
+                for future in concurrent.futures.as_completed(future_to_offset):
+                    page_res = future.result()
+                    if page_res and isinstance(page_res, dict):
+                        page_items = page_res["items"]
+                        all_items.extend(page_items)
+                        if page_callback:
+                            page_callback(page_items, total)
 
-            if total is None:
-                total = (data.get("total") or data.get("count") or 0
-                         if isinstance(data, dict) else 0)
-
-            if not items:
-                break
-
-            all_items.extend(items)
-
-            if total and len(all_items) >= total:
-                break
-
-            offset += limit
-
-        print(f"[Library] Fetched {len(all_items)} games "
-              f"in {offset // limit + 1} page(s)")
+        # Aggregate and cache
         self.user_games = all_items
         self.save_library_cache(all_items)
         if self.config:
             self.config.set("cached_library", all_items)
+        
+        print(f"[Library] Parallel fetch complete: {len(all_items)} games.")
         return all_items
 
     def get_cover_url(self, game):

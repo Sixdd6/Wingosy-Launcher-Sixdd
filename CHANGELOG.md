@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.5.7
+### Fixes
+- Library now loads all pages in parallel — users with 300+ ROMs and slow servers go from 6+ minutes to ~60s
+- Added loading status label: shows connecting/loading progress inline instead of popup banners
+- Connection timeout increased with better error messages
+- MEI cleanup delay increased to prevent access denied on restart
+
+## v0.5.6
+### Fixes
+- Connection timeout: app no longer hangs indefinitely on slow or unreachable servers
+- Better error messages: distinguishes timeout vs wrong host vs auth failure
+- MEI cleanup delay increased to prevent access denied errors on restart
+
 ## v0.5.5
 ### Critical Fixes
 - Fixed app crash on restart (certifi TLS path after MEI cleanup)

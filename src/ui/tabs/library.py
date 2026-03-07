@@ -109,6 +109,8 @@ class LibraryTab(QWidget):
         self._load_more_label = None  # "Load more..." indicator at bottom
         self.LOAD_BATCH = 200
         self._is_loading_batch = False  # guard against concurrent loads
+        self._total_server_games = 0
+        self._loaded_count = 0
         
         self._scroll_debounce = QTimer()
         self._scroll_debounce.setSingleShot(True)
@@ -161,6 +163,64 @@ class LibraryTab(QWidget):
         self._resize_debounce.timeout.connect(self._resize_all_cards)
 
         layout.addWidget(self.scroll_area)
+
+        # Status label at the very bottom
+        self.status_label = QLabel()
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("color: #bbb; padding: 5px; background: #222; border-top: 1px solid #333;")
+        self.status_label.setVisible(False)
+        layout.addWidget(self.status_label)
+
+    def set_status(self, text, color=None):
+        if not text:
+            self.status_label.setVisible(False)
+            return
+        self.status_label.setText(text)
+        if color:
+            self.status_label.setStyleSheet(f"color: {color}; padding: 5px; background: #222; border-top: 1px solid #333;")
+        else:
+            self.status_label.setStyleSheet("color: #bbb; padding: 5px; background: #222; border-top: 1px solid #333;")
+        self.status_label.setVisible(True)
+
+    def append_batch(self, games):
+        """Append a batch of games to the grid without full re-render."""
+        sync_cache = (self.main_window.watcher.sync_cache
+                      if self.main_window.watcher else {})
+        
+        card_w, card_h, cols_per_row = self._get_card_size()
+        
+        self.grid_widget.setUpdatesEnabled(False)
+        try:
+            total_so_far = len(self._all_cards)
+            row = total_so_far // cols_per_row
+            col = total_so_far % cols_per_row
+
+            # Determine if current filter allows these games
+            text = self.search_input.text().lower()
+            platform = self.platform_filter.currentText()
+
+            for game in games:
+                # Filter check
+                matches_search = not text or text in game.get('name', '').lower() or text in game.get('fs_name', '').lower()
+                matches_platform = (platform == "All Platforms" 
+                                   or game.get('platform_display_name') == platform 
+                                   or game.get('platform_slug') == platform)
+                
+                if matches_search and matches_platform:
+                    card = GameCard(game, self.client, self.config, sync_cache)
+                    card.clicked.connect(lambda g=game: self.open_detail(g))
+                    card.setFixedSize(card_w, card_h)
+                    card.img_label.setFixedSize(card_w - 10, card_h - 30)
+                    card.title_label.setFixedWidth(card_w - 10)
+                    self.grid_layout.addWidget(card, row, col)
+                    self._all_cards.append(card)
+                    
+                    col += 1
+                    if col >= cols_per_row:
+                        col = 0
+                        row += 1
+        finally:
+            self.grid_widget.setUpdatesEnabled(True)
 
     def _get_card_size(self):
         """Compute card width/height based on viewport width and cols setting."""
@@ -406,45 +466,6 @@ class LibraryTab(QWidget):
         # Local import to avoid circular dependency with dialogs.py
         from src.ui.dialogs import GameDetailDialog
         GameDetailDialog(game, self.client, self.config, self.main_window, self.main_window).exec()
-
-    def show_connecting_banner(self):
-        if not hasattr(self, '_banner_label'):
-            self._banner_label = QLabel()
-            self._banner_label.setAlignment(Qt.AlignCenter)
-            self._banner_label.setFixedHeight(32)
-            # Insert at top of layout, index 0
-            self.layout().insertWidget(0, self._banner_label)
-        self._banner_label.setText("  🔄  Connecting to RomM server...")
-        self._banner_label.setStyleSheet(
-            "background: #1565c0; color: white; "
-            "font-size: 12px; border-radius: 4px;")
-        self._banner_label.setVisible(True)
-
-    def show_slow_connection_banner(self):
-        if not hasattr(self, '_banner_label'):
-            self.show_connecting_banner()
-        self._banner_label.setText(
-            "  🐢  Server is slow to respond, retrying with longer timeout... "
-            "(This may take a few minutes on first launch)")
-        self._banner_label.setStyleSheet(
-            "background: #e65100; color: white; "
-            "font-size: 12px; border-radius: 4px;")
-        self._banner_label.setVisible(True)
-
-    def show_connection_failed_banner(self):
-        if not hasattr(self, '_banner_label'):
-            self.show_connecting_banner()
-        self._banner_label.setText(
-            "  ⚠️  Could not connect to RomM server. "
-            "Check your settings.")
-        self._banner_label.setStyleSheet(
-            "background: #b71c1c; color: white; "
-            "font-size: 12px; border-radius: 4px;")
-        self._banner_label.setVisible(True)
-
-    def hide_banner(self):
-        if hasattr(self, '_banner_label'):
-            self._banner_label.setVisible(False)
 
     def show_empty_message(self, message):
         for i in reversed(range(self.grid_layout.count())):

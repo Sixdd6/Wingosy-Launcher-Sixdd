@@ -22,16 +22,37 @@ from src.utils import zip_path
 from src.platforms import RETROARCH_PLATFORMS, platform_matches
 
 class LibraryFetchWorker(QThread):
-    finished = Signal(object)  # emits the result (list or "REAUTH_REQUIRED")
-    error = Signal()           # emitted on network failure
-    retrying = Signal()        # emitted on Stage 1 timeout
+    finished = Signal(object)    # emits the final list or "REAUTH_REQUIRED"
+    error = Signal()             # emitted on network failure
+    retrying = Signal()          # emitted on Stage 1 timeout
+    batch_ready = Signal(list, int) # emits a batch of games and total count
+
     def __init__(self, client, cached_non_empty=False):
         super().__init__()
         self.client = client
         self.cached_non_empty = cached_non_empty
+
     def run(self):
+        def _on_page(batch, total):
+            # Pre-calculate local ROM existence for this batch
+            base_rom = self.client.config.get("base_rom_path")
+            if base_rom:
+                base_path = Path(base_rom)
+                for g in batch:
+                    rom_name = g.get('fs_name')
+                    platform = g.get('platform_slug')
+                    exists = False
+                    if rom_name:
+                        if (base_path / platform / rom_name).exists() or (base_path / rom_name).exists():
+                            exists = True
+                    g['_local_exists'] = exists
+            self.batch_ready.emit(batch, total)
+
         try:
-            result = self.client.fetch_library(retry_callback=lambda: self.retrying.emit())
+            result = self.client.fetch_library(
+                retry_callback=lambda: self.retrying.emit(),
+                page_callback=_on_page
+            )
         except Exception:
             result = None
         
@@ -39,31 +60,8 @@ class LibraryFetchWorker(QThread):
             self.error.emit()
             return
 
-        if isinstance(result, list):
-            if not result and self.cached_non_empty:
-                # If we had a cache but now it's empty, it might be an error or genuine empty.
-                # But fetch_library returning None is our explicit error signal now.
-                self.finished.emit([])
-            elif not result:
-                # Empty but no cache to compare — just finish
-                self.finished.emit([])
-            else:
-                # Pre-calculate local ROM existence in background thread to avoid UI lag
-                base_rom = self.client.config.get("base_rom_path")
-                if base_rom:
-                    base_path = Path(base_rom)
-                    for g in result:
-                        rom_name = g.get('fs_name')
-                        platform = g.get('platform_slug')
-                        exists = False
-                        if rom_name:
-                            # Check platform subfolder and root
-                            if (base_path / platform / rom_name).exists() or (base_path / rom_name).exists():
-                                exists = True
-                        g['_local_exists'] = exists
-                self.finished.emit(result)
-        else:
-            self.finished.emit(result)
+        # Final result emission (used for final cache and cleanup)
+        self.finished.emit(result)
 
 class WingosyMainWindow(QMainWindow):
     def __init__(self, config_manager, client, watcher_class, version):
@@ -162,7 +160,7 @@ class WingosyMainWindow(QMainWindow):
         self.library_tab.refresh_btn.setEnabled(False)
         self.library_tab.retry_btn.setVisible(False)
         self._library_fetch_done = False
-
+        
         if not force_refresh:
             # Step A — Load from cache immediately
             cached = self.config.get("cached_library", [])
@@ -177,21 +175,47 @@ class WingosyMainWindow(QMainWindow):
                 self.log("🔄 Loading library...")
         else:
             self.log("🔄 Force refresh — fetching from server...")
+            self.all_games = []
+            self.library_tab.populate_grid([]) # Clear grid for fresh fetch
 
-        # Step B — Show a connecting banner
-        self.library_tab.show_connecting_banner()
+        # Step B — Show status
+        self.library_tab.set_status("Connecting to RomM server...")
 
         # Step C — Start worker
         cached_non_empty = len(self.config.get("cached_library", [])) > 0
         self._fetch_thread = LibraryFetchWorker(self.client, cached_non_empty=cached_non_empty)
         self._fetch_thread.finished.connect(self._on_library_fetched)
-        self._fetch_thread.error.connect(lambda: self.library_tab.show_connection_failed_banner())
-        self._fetch_thread.retrying.connect(self.library_tab.show_slow_connection_banner)
+        self._fetch_thread.error.connect(lambda: self.library_tab.set_status("Could not connect to RomM server. Check your settings.", color="#b71c1c"))
+        self._fetch_thread.retrying.connect(lambda: self.library_tab.set_status("Server is slow, retrying with longer timeout... (this may take a few minutes)", color="#e65100"))
+        self._fetch_thread.batch_ready.connect(self._on_library_batch)
         self._fetch_thread.start()
+
+    def _on_library_batch(self, batch, total):
+        """Called as each page arrives from parallel fetcher."""
+        if self._library_fetch_done: return
+        
+        # Avoid duplication if we are building on top of cache 
+        # (server data replaces cache batch-by-batch)
+        # For simplicity in this progressive view, if we're not force-refreshing,
+        # we might just wait for final fetch. But user wants progressive.
+        
+        # If this is the FIRST batch of a fresh fetch or first launch:
+        is_first_batch = (len(self.all_games) == 0 or len(self.all_games) == len(batch))
+        
+        if is_first_batch:
+            self.all_games = list(batch)
+            self.library_tab.populate_grid(self.all_games)
+        else:
+            # Append subsequent batches
+            self.all_games.extend(batch)
+            self.library_tab.append_batch(batch)
+        
+        # Update status
+        self.library_tab.set_status(f"Loading library... ({len(self.all_games)} / {total} games)")
 
     def _on_library_fetched(self, res):
         self._library_fetch_done = True
-        self.library_tab.hide_banner()
+        self.library_tab.set_status(None) # Hide
         self.library_tab.refresh_btn.setEnabled(True)
         
         if res == "REAUTH_REQUIRED":
@@ -200,15 +224,21 @@ class WingosyMainWindow(QMainWindow):
             self.open_settings()
             return
         
-        if not isinstance(res, list):
-            self.log("❌ Unexpected response from server. Check your RomM version.")
-            # Thread-safe UI update
-            QTimer.singleShot(0, lambda: self._show_empty_library_message("Could not load library. Check logs."))
+        if res is None:
+            self.log("❌ Failed to fetch library from server.")
+            self.library_tab.set_status("Connection failed.", color="#b71c1c")
             return
         
-        self.log(f"✅ Library loaded: {len(res)} games")
-        # Thread-safe UI update
-        QTimer.singleShot(0, lambda: self._populate_from_games(res))
+        if not isinstance(res, list):
+            self.log("❌ Unexpected response from server. Check your RomM version.")
+            return
+        
+        self.log(f"✅ Library fully loaded: {len(res)} games")
+        # Ensure final state is correct (in case batches arrived out of order or were incomplete)
+        self.all_games = res
+        self._update_platform_filter(res)
+        # Final render to ensure everything is in place
+        self.library_tab.apply_filters()
 
     def _update_platform_filter(self, games):
         platforms = sorted(set(
@@ -234,11 +264,10 @@ class WingosyMainWindow(QMainWindow):
             self.library_tab.platform_filter.setCurrentIndex(idx)
         self.library_tab.platform_filter.blockSignals(False)
 
-    def _populate_from_games(self, games):
+    def _populate_from_games(self, games, is_progressive=False):
         """Populate the UI with a list of games. Called from cache or fresh fetch."""
         # Optimization: If the games list is identical to what we have, 
         # only update if we were previously empty
-        is_new_data = (len(games) != len(self.all_games))
         self.all_games = games
         
         if not games:
@@ -246,13 +275,15 @@ class WingosyMainWindow(QMainWindow):
                 "No games found. Check your RomM library or platform filter.")
             return
 
-        # Only rebuild the platform list if data is actually new/different
-        if is_new_data:
+        # Only rebuild the platform list if not in progressive mode (avoid jitter)
+        if not is_progressive:
             self._update_platform_filter(games)
         
         # Force a visual rebuild to update indicators (local exists, etc)
-        if hasattr(self.library_tab, '_current_platform'):
-            delattr(self.library_tab, '_current_platform')
+        # But if progressive, only rebuild if it's the first batch or platform changed
+        if not is_progressive:
+            if hasattr(self.library_tab, '_current_platform'):
+                delattr(self.library_tab, '_current_platform')
         
         # Respect current filters instead of showing all
         self.library_tab.apply_filters()
