@@ -48,7 +48,7 @@ if sys.platform == "win32":
         sys.stderr = io.TextIOWrapper(
             sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-VERSION = "0.5.5"
+VERSION = "0.5.6"
 
 def _cleanup_old_mei_folders():
     """Delete stale PyInstaller _MEI temp folders from previous runs."""
