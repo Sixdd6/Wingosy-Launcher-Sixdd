@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.6.0
+### Security
+- Migrated authentication token storage from plaintext `config.json` to the system's native secure credential manager (Windows Credential Picker / Keychain) using the `keyring` library.
+- Automatic migration: existing tokens are moved to the secure store and removed from disk on first startup.
+
+### Fixes
+- Standardized `RomMClient` methods to handle token lifecycle internally.
+- Improved logout to clear credentials from both memory and system storage.
+
 ## v0.5.7
 ### Fixes
 - Library now loads all pages in parallel — users with 300+ ROMs and slow servers go from 6+ minutes to ~60s

@@ -2,7 +2,13 @@ import json
 import os
 import shutil
 import copy
+import logging
 from pathlib import Path
+
+try:
+    import keyring
+except ImportError:
+    keyring = None
 
 class ConfigManager:
     DEFAULT_CONFIG = {
@@ -165,10 +171,24 @@ class ConfigManager:
                             self.data[k] = v
                     
                     # 2. Clean Host URL
-                    if self.data["host"]:
+                    if self.data.get("host"):
                         self.data["host"] = self.data["host"].rstrip('/')
 
-                    # 3. Smart Merge Emulators (Restore paths while allowing metadata updates)
+                    # 3. Migration: if token exists in loaded_data, move to keyring
+                    if "token" in loaded_data:
+                        token = loaded_data["token"]
+                        if token and keyring:
+                            try:
+                                keyring.set_password("wingosy", "auth_token", token)
+                                logging.info("Migrated token to system keyring")
+                            except Exception as e:
+                                logging.warning(f"Keyring migration error: {e}")
+                        
+                        # Remove from self.data and save immediately to strip from config.json
+                        self.data.pop("token", None)
+                        self.save()
+
+                    # 4. Smart Merge Emulators (Restore paths while allowing metadata updates)
                     loaded_emus = loaded_data.get("emulators", {})
                     for name, current_cfg in self.data["emulators"].items():
                         for old_name, old_data in loaded_emus.items():
@@ -184,8 +204,14 @@ class ConfigManager:
     def save(self):
         self.config_dir.mkdir(parents=True, exist_ok=True)
         try:
+            # Create a copy to avoid modifying live data if needed, 
+            # though here we already removed 'token' from self.data
+            save_data = copy.deepcopy(self.data)
+            # Ensure token is NEVER saved to config.json
+            save_data.pop("token", None)
+            
             with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(self.data, f, indent=4)
+                json.dump(save_data, f, indent=4)
         except Exception as e:
             print(f"Error saving config: {e}")
 
@@ -196,5 +222,17 @@ class ConfigManager:
         if value is None:
             self.data.pop(key, None)
         else:
+            if key == "token":
+                # Special handling for token: save to keyring, not config.json
+                if value and keyring:
+                    try:
+                        keyring.set_password("wingosy", "auth_token", value)
+                        return
+                    except Exception as e:
+                        logging.warning(f"Failed to save token to keyring: {e}")
+                # Fallback to self.data if keyring fails (will be saved to json if not careful)
+                # But wait, our save() method pops 'token', so it won't be saved to json anyway.
+                # However, if keyring fails, we might still want it in memory.
+            
             self.data[key] = value
         self.save()

@@ -6,6 +6,12 @@ from pathlib import Path
 from urllib.parse import quote
 
 import requests
+import logging
+
+try:
+    import keyring
+except ImportError:
+    keyring = None
 
 def _get_certifi_path():
     """Get certifi CA bundle path, handling PyInstaller."""
@@ -29,12 +35,40 @@ class RomMClient:
     def __init__(self, host, config=None):
         self.host = host.rstrip('/')
         self.config = config
-        self.token = None
+        self.token = self._load_token()
         self.user_games = []
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
         self.library_cache_path = Path.home() / ".wingosy" / "library_cache.json"
+
+    def _load_token(self):
+        """Retrieve token from keyring, with fallback to config."""
+        if keyring:
+            try:
+                token = keyring.get_password("wingosy", "auth_token")
+                if token:
+                    return token
+            except Exception as e:
+                logging.warning(f"Keyring retrieval error: {e}")
+        
+        # Fallback to plaintext config if keyring fails or is empty
+        if self.config:
+            return self.config.get("token")
+        return None
+
+    def logout(self):
+        """Clear the auth token from memory and system keyring."""
+        self.token = None
+        if keyring:
+            try:
+                keyring.delete_password("wingosy", "auth_token")
+                logging.info("Logged out: removed token from keyring")
+            except Exception as e:
+                logging.warning(f"Failed to remove token from keyring: {e}")
+        
+        if self.config:
+            self.config.set("token", None)
 
     def save_library_cache(self, games):
         """Save fetched library to disk for instant startup next time."""
@@ -127,6 +161,20 @@ class RomMClient:
 
             if r.status_code == 200:
                 self.token = r.json()["access_token"]
+                
+                # Save to keyring with fallback to config
+                saved_to_keyring = False
+                if keyring:
+                    try:
+                        keyring.set_password("wingosy", "auth_token", self.token)
+                        saved_to_keyring = True
+                    except Exception as e:
+                        logging.warning(f"Failed to save token to keyring: {e}")
+                
+                if not saved_to_keyring and self.config:
+                    # Fallback to config.json
+                    self.config.set("token", self.token)
+                
                 return True, self.token
             return False, r.json().get("detail", "Login failed")
         except Exception as e:

@@ -539,7 +539,7 @@ class SettingsDialog(QDialog):
         if reply != QMessageBox.Yes:
             return
             
-        self.config.set("token", None)
+        self.main_window.client.logout()
         self.config.set("password", None)
         QMessageBox.information(self, "Logged Out", "You have been logged out. Restart to log in.")
         QApplication.instance().quit()

@@ -172,6 +172,9 @@ class DummyRomMClient:
         self.token = "dummy-token"
         return True, self.token
 
+    def logout(self):
+        self.token = None
+
     def get_auth_headers(self):
         return {"Authorization": "Bearer dummy-token"}
 
