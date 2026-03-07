@@ -59,6 +59,48 @@ class GameDescriptionFetcher(QThread):
         except Exception:
             self.finished.emit("No description available.")
 
+class ExtractionThread(QThread):
+    progress = Signal(str)
+    finished = Signal(bool, str)
+
+    def __init__(self, archive_path, target_dir):
+        super().__init__()
+        self.archive_path = Path(archive_path)
+        self.target_dir = Path(target_dir)
+
+    def run(self):
+        try:
+            self.progress.emit("Extracting...")
+            self.target_dir.mkdir(parents=True, exist_ok=True)
+            ext = self.archive_path.suffix.lower()
+
+            if ext == ".zip":
+                with zipfile.ZipFile(self.archive_path, 'r') as z:
+                    z.extractall(self.target_dir)
+            elif ext in [".7z", ".iso"]:
+                import py7zr
+                try:
+                    with py7zr.SevenZipFile(self.archive_path, mode='r') as z:
+                        z.extractall(self.target_dir)
+                except Exception as e:
+                    if ext == ".iso":
+                        self.finished.emit(False, f"Could not extract ISO — user must handle manually: {e}")
+                        return
+                    raise e
+            else:
+                self.finished.emit(False, f"Unsupported archive format: {ext}")
+                return
+
+            # Cleanup
+            try:
+                self.archive_path.unlink()
+            except Exception:
+                pass
+
+            self.finished.emit(True, str(self.target_dir))
+        except Exception as e:
+            self.finished.emit(False, str(e))
+
 class BaseDownloader(QThread):
     progress = Signal(int, float)
     finished = Signal(bool, str)

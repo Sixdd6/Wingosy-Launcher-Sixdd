@@ -88,6 +88,18 @@ DEFAULT_EMULATORS = [
             "path": ""
         },
         "user_defined": False
+    },
+    {
+        "id": "windows_native",
+        "name": "Windows (Native)",
+        "executable_path": "",
+        "launch_args": ["{rom_path}"],
+        "platform_slugs": ["windows", "win", "pc", "pc-windows", "windows-games", "win95", "win98"],
+        "save_resolution": {
+            "mode": "none"
+        },
+        "user_defined": False,
+        "is_native": True
     }
 ]
 
