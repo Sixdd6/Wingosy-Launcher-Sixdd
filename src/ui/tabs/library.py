@@ -407,6 +407,34 @@ class LibraryTab(QWidget):
         from src.ui.dialogs import GameDetailDialog
         GameDetailDialog(game, self.client, self.config, self.main_window, self.main_window).exec()
 
+    def show_connecting_banner(self):
+        if not hasattr(self, '_banner_label'):
+            self._banner_label = QLabel()
+            self._banner_label.setAlignment(Qt.AlignCenter)
+            self._banner_label.setFixedHeight(32)
+            # Insert at top of layout, index 0
+            self.layout().insertWidget(0, self._banner_label)
+        self._banner_label.setText("  🔄  Connecting to RomM server...")
+        self._banner_label.setStyleSheet(
+            "background: #1565c0; color: white; "
+            "font-size: 12px; border-radius: 4px;")
+        self._banner_label.setVisible(True)
+
+    def show_connection_failed_banner(self):
+        if not hasattr(self, '_banner_label'):
+            self.show_connecting_banner()
+        self._banner_label.setText(
+            "  ⚠️  Could not connect to RomM server. "
+            "Check your settings.")
+        self._banner_label.setStyleSheet(
+            "background: #b71c1c; color: white; "
+            "font-size: 12px; border-radius: 4px;")
+        self._banner_label.setVisible(True)
+
+    def hide_banner(self):
+        if hasattr(self, '_banner_label'):
+            self._banner_label.setVisible(False)
+
     def show_empty_message(self, message):
         for i in reversed(range(self.grid_layout.count())):
             item = self.grid_layout.itemAt(i)

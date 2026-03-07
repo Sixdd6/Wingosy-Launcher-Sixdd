@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here.
 
+## [0.5.3] - 2026-03-07
+
+### Added
+- Cards per row setting in Settings — choose between 1 and 12 cards 
+  per row, updates the grid instantly without restarting
+- Dynamic card scaling — cards resize to fill the available window 
+  width automatically when the window is resized
+- Background connection on startup — app opens instantly using cached 
+  library data while connecting to RomM in the background
+- Connection status banner in library — shows "Connecting..." on 
+  startup, turns red with an error message after 5 seconds if the 
+  server is unreachable
+- Editable host field in Settings — change your RomM server IP/URL 
+  in real time with a Test Connection button and Apply & Re-connect 
+  button that restarts the app with the new host
+
+### Fixed
+- App no longer crashes with a raw Python traceback when the RomM 
+  server is unreachable or times out — shows a friendly error instead
+- Mid-session disconnects (e.g. clicking Refresh while offline) now 
+  show a warning dialog instead of crashing
+
 ## [0.5.2] - 2026-03-06
 
 ### Added

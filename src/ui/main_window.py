@@ -21,28 +21,42 @@ from src.ui.tabs.emulators import EmulatorsTab
 from src.utils import zip_path
 from src.platforms import RETROARCH_PLATFORMS, platform_matches
 
-class LibraryFetchThread(QThread):
+class LibraryFetchWorker(QThread):
     finished = Signal(object)  # emits the result (list or "REAUTH_REQUIRED")
-    def __init__(self, client):
+    error = Signal()           # emitted on network failure
+    def __init__(self, client, cached_non_empty=False):
         super().__init__()
         self.client = client
+        self.cached_non_empty = cached_non_empty
     def run(self):
-        result = self.client.fetch_library()
+        try:
+            result = self.client.fetch_library()
+        except Exception:
+            result = []
+        
         if isinstance(result, list):
-            # Pre-calculate local ROM existence in background thread to avoid UI lag
-            base_rom = self.client.config.get("base_rom_path")
-            if base_rom:
-                base_path = Path(base_rom)
-                for g in result:
-                    rom_name = g.get('fs_name')
-                    platform = g.get('platform_slug')
-                    exists = False
-                    if rom_name:
-                        # Check platform subfolder and root
-                        if (base_path / platform / rom_name).exists() or (base_path / rom_name).exists():
-                            exists = True
-                    g['_local_exists'] = exists
-        self.finished.emit(result)
+            if not result and self.cached_non_empty:
+                self.error.emit()
+            elif not result:
+                # Empty but no cache to compare — just finish
+                self.finished.emit([])
+            else:
+                # Pre-calculate local ROM existence in background thread to avoid UI lag
+                base_rom = self.client.config.get("base_rom_path")
+                if base_rom:
+                    base_path = Path(base_rom)
+                    for g in result:
+                        rom_name = g.get('fs_name')
+                        platform = g.get('platform_slug')
+                        exists = False
+                        if rom_name:
+                            # Check platform subfolder and root
+                            if (base_path / platform / rom_name).exists() or (base_path / rom_name).exists():
+                                exists = True
+                        g['_local_exists'] = exists
+                self.finished.emit(result)
+        else:
+            self.finished.emit(result)
 
 class WingosyMainWindow(QMainWindow):
     def __init__(self, config_manager, client, watcher_class, version):
@@ -140,33 +154,55 @@ class WingosyMainWindow(QMainWindow):
         """
         self.library_tab.refresh_btn.setEnabled(False)
         self.library_tab.retry_btn.setVisible(False)
+        self._library_fetch_done = False
 
         if not force_refresh:
-            # Try to show cached library immediately
-            cached_games, cache_age = self.client.load_library_cache()
-            if cached_games:
-                age_str = (f"{int(cache_age/60)}m" if cache_age < 3600
-                           else f"{int(cache_age/3600)}h")
-                self.log(f"📦 Cached library: {len(cached_games)} games "
-                         f"({age_str} old) — checking for updates...")
-                self._populate_from_games(cached_games)
+            # Step A — Load from cache immediately
+            cached = self.config.get("cached_library", [])
+            if cached:
+                self.all_games = cached
+                self.library_tab.populate_grid(cached)
+                # Ensure platform filter is updated for cached games
+                self._update_platform_filter(cached)
+                self.log(f"📦 Loaded {len(cached)} games from cache.")
             else:
                 self.log("🔄 Loading library...")
         else:
             self.log("🔄 Force refresh — fetching from server...")
 
-        # Always fetch fresh in background regardless
-        self._fetch_thread = LibraryFetchThread(self.client)
+        # Step B — Show a connecting banner
+        self.library_tab.show_connecting_banner()
+
+        # Step C — Start worker
+        cached_non_empty = len(self.config.get("cached_library", [])) > 0
+        self._fetch_thread = LibraryFetchWorker(self.client, cached_non_empty=cached_non_empty)
         self._fetch_thread.finished.connect(self._on_library_fetched)
+        self._fetch_thread.error.connect(lambda: self.library_tab.show_connection_failed_banner())
         self._fetch_thread.start()
 
+        # 5 second timeout
+        self._connect_timeout = QTimer()
+        self._connect_timeout.setSingleShot(True)
+        self._connect_timeout.setInterval(5000)
+        self._connect_timeout.timeout.connect(self._on_connect_timeout)
+        self._connect_timeout.start()
+
+    def _on_connect_timeout(self):
+        # Only fire if worker hasn't completed yet
+        if not self._library_fetch_done:
+            self.library_tab.show_connection_failed_banner()
+
     def _on_library_fetched(self, res):
+        self._library_fetch_done = True
+        self.library_tab.hide_banner()
         self.library_tab.refresh_btn.setEnabled(True)
+        
         if res == "REAUTH_REQUIRED":
             QMessageBox.warning(self, "Session Expired", 
                 "Your session has expired. Please log in again.")
             self.open_settings()
             return
+        
         if not isinstance(res, list):
             self.log("❌ Unexpected response from server. Check your RomM version.")
             # Thread-safe UI update
@@ -176,6 +212,30 @@ class WingosyMainWindow(QMainWindow):
         self.log(f"✅ Library loaded: {len(res)} games")
         # Thread-safe UI update
         QTimer.singleShot(0, lambda: self._populate_from_games(res))
+
+    def _update_platform_filter(self, games):
+        platforms = sorted(set(
+            g.get('platform_display_name') for g in games
+            if g.get('platform_display_name')
+        ))
+        self.library_tab.platform_filter.blockSignals(True)
+        previously_selected = self.library_tab.platform_filter.currentText()
+        self.library_tab.platform_filter.clear()
+        self.library_tab.platform_filter.addItem("All Platforms")
+        self.library_tab.platform_filter.addItems(platforms)
+        
+        # Add No Emulator filter if needed
+        all_known = set(RETROARCH_PLATFORMS)
+        for emu in self.config.get("emulators", {}).values():
+            all_known.update(emu.get("platform_slugs", [emu.get("platform_slug", "")]))
+        has_unknown = any(g.get("platform_slug") not in all_known for g in games)
+        if has_unknown:
+            self.library_tab.platform_filter.addItem("⚠️ No Emulator")
+            
+        idx = self.library_tab.platform_filter.findText(previously_selected)
+        if idx >= 0:
+            self.library_tab.platform_filter.setCurrentIndex(idx)
+        self.library_tab.platform_filter.blockSignals(False)
 
     def _populate_from_games(self, games):
         """Populate the UI with a list of games. Called from cache or fresh fetch."""
@@ -191,28 +251,7 @@ class WingosyMainWindow(QMainWindow):
 
         # Only rebuild the platform list if data is actually new/different
         if is_new_data:
-            platforms = sorted(set(
-                g.get('platform_display_name') for g in games
-                if g.get('platform_display_name')
-            ))
-            self.library_tab.platform_filter.blockSignals(True)
-            previously_selected = self.library_tab.platform_filter.currentText()
-            self.library_tab.platform_filter.clear()
-            self.library_tab.platform_filter.addItem("All Platforms")
-            self.library_tab.platform_filter.addItems(platforms)
-            
-            # Add No Emulator filter if needed
-            all_known = set(RETROARCH_PLATFORMS)
-            for emu in self.config.get("emulators", {}).values():
-                all_known.update(emu.get("platform_slugs", [emu.get("platform_slug", "")]))
-            has_unknown = any(g.get("platform_slug") not in all_known for g in games)
-            if has_unknown:
-                self.library_tab.platform_filter.addItem("⚠️ No Emulator")
-                
-            idx = self.library_tab.platform_filter.findText(previously_selected)
-            if idx >= 0:
-                self.library_tab.platform_filter.setCurrentIndex(idx)
-            self.library_tab.platform_filter.blockSignals(False)
+            self._update_platform_filter(games)
         
         self.library_tab.populate_grid(games)
 

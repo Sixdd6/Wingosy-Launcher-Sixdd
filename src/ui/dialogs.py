@@ -248,13 +248,28 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.config = config_manager
         self.main_window = main_window
-        self.resize(400, 450)
+        self.resize(400, 500)
         self.settings_layout = QVBoxLayout(self)
-        self.settings_layout.addWidget(QLabel(f"<b>RomM Host:</b> {self.config.get('host')}"))
-        
-        self.test_btn = QPushButton("🔌 Test Connection")
-        self.test_btn.clicked.connect(self.test_connection)
-        self.settings_layout.addWidget(self.test_btn)
+
+        host_layout = QHBoxLayout()
+        host_layout.addWidget(QLabel("Server Host:"))
+        self.host_input = QLineEdit()
+        self.host_input.setText(self.config.get("host", ""))
+        self.host_input.setPlaceholderText("http://192.168.x.x:8285")
+        host_layout.addWidget(self.host_input)
+
+        self.test_conn_btn = QPushButton("Test Connection")
+        self.test_conn_btn.clicked.connect(self._test_host_connection)
+        host_layout.addWidget(self.test_conn_btn)
+
+        self.reconnect_btn = QPushButton("✅ Apply & Re-connect")
+        self.reconnect_btn.setVisible(False)
+        self.reconnect_btn.setStyleSheet(
+            "background: #2e7d32; color: white; padding: 4px 10px;")
+        self.reconnect_btn.clicked.connect(self._apply_and_restart)
+        host_layout.addWidget(self.reconnect_btn)
+
+        self.settings_layout.addLayout(host_layout)
         
         self.settings_layout.addWidget(QLabel(f"<b>User:</b> {self.config.get('username')}"))
         self.settings_layout.addWidget(QLabel(f"<b>Version:</b> {self.main_window.version}"))
@@ -335,22 +350,42 @@ class SettingsDialog(QDialog):
 
         self.latest_version_url = ""
 
-    def test_connection(self):
-        self.test_btn.setEnabled(False)
-        self.test_btn.setText("Testing...")
-        self.test_thread = ConnectionTestThread(self.main_window.client)
-        self.test_thread.finished.connect(self.on_test_result)
-        self.test_thread.finished.connect(lambda: self.main_window.active_threads.remove(self.test_thread) if self.test_thread in self.main_window.active_threads else None)
-        self.main_window.active_threads.append(self.test_thread)
-        self.test_thread.start()
-
-    def on_test_result(self, success, msg):
-        self.test_btn.setEnabled(True)
-        self.test_btn.setText("🔌 Test Connection")
+    def _test_host_connection(self):
+        host = self.host_input.text().strip()
+        if not host:
+            QMessageBox.warning(self, "No Host", "Please enter a host URL.")
+            return
+        self.test_conn_btn.setText("Testing...")
+        self.test_conn_btn.setEnabled(False)
+        # Temporarily override host for test
+        import requests
+        try:
+            r = requests.get(
+                f"{host.rstrip('/')}/api/roms?limit=1&offset=0",
+                headers=self.main_window.client.get_auth_headers(),
+                timeout=5
+            )
+            success = r.status_code == 200
+        except Exception:
+            success = False
+        self.test_conn_btn.setText("Test Connection")
+        self.test_conn_btn.setEnabled(True)
         if success:
-            QMessageBox.information(self, "Connection Test", f"✅ {msg}")
+            QMessageBox.information(self, "Success",
+                "Connection successful! Click 'Apply & Reconnect' to use this host.")
+            self.reconnect_btn.setVisible(True)
         else:
-            QMessageBox.critical(self, "Connection Test", f"❌ {msg}")
+            QMessageBox.warning(self, "Failed",
+                "Could not connect to that host. Check the URL and port.")
+            self.reconnect_btn.setVisible(False)
+
+    def _apply_and_restart(self):
+        new_host = self.host_input.text().strip()
+        self.config.set("host", new_host)
+        QMessageBox.information(self, "Restarting",
+            "Host saved. The app will now restart.")
+        import sys, os
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
     def show_about(self):
         QMessageBox.about(self, "About Wingosy",

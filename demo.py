@@ -36,7 +36,7 @@ def main():
     args = parser.parse_args()
 
     logger.info("=" * 60)
-    logger.info("  WINGOSY DEMO MODE — based on v0.5.2")
+    logger.info("  WINGOSY DEMO MODE — based on v0.5.3")
     logger.info(f"  Fake library size: {args.count} games")
     logger.info(f"  Log file: {log_path.resolve()}")
     logger.info("=" * 60)
@@ -48,6 +48,8 @@ def main():
     app.setStyle("Fusion")
 
     config = ConfigManager()
+    # Always show first-run setup dialog in demo mode
+    config.set("first_run", True)
 
     # Use dummy client — no login needed
     DummyRomMClient.GAME_COUNT = args.count
