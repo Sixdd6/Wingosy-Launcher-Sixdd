@@ -4,8 +4,8 @@ import subprocess
 import logging
 import zipfile
 from pathlib import Path
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QProgressBar, QScrollArea, QFileDialog, QApplication)
-from PySide6.QtCore import Qt, QTimer, Signal, QThread
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QProgressBar, QScrollArea, QFileDialog, QApplication)
+from PySide6.QtCore import Qt, QTimer, Signal, QThread, QPoint
 from PySide6.QtGui import QPixmap
 
 from src.ui.threads import (RomDownloader, ImageFetcher, ConflictResolveThread, GameDescriptionFetcher, ExtractionThread)
@@ -59,14 +59,14 @@ def check_retroarch_autosave(ra_exe_path, platform_slug, parent, config=None):
     
     result = QMessageBox.question(
         parent, 
-        "RetroArch Auto-Save States", 
+        "RetroArch Auto-Save States — Wingosy", 
         f"Enable auto save/load states in retroarch.cfg?\n\nMissing: {', '.join(missing)}", 
         QMessageBox.Yes | QMessageBox.No
     )
     
     if result == QMessageBox.Yes:
         write_retroarch_cfg_values(str(cfg_path), {"savestate_auto_save": "true", "savestate_auto_load": "true"})
-        QMessageBox.information(parent, "RetroArch Auto-Save States", "✅ Auto save/load states enabled.")
+        QMessageBox.information(parent, "RetroArch Auto-Save States — Wingosy", "✅ Auto save/load states enabled.")
 
 def check_ppsspp_assets(ra_exe_path, parent):
     global _ppsspp_assets_checked
@@ -80,7 +80,7 @@ def check_ppsspp_assets(ra_exe_path, parent):
         
     result = QMessageBox.question(
         parent, 
-        "PPSSPP Assets Missing", 
+        "PPSSPP Assets Missing — Wingosy", 
         "Download missing PPSSPP assets now?", 
         QMessageBox.Yes | QMessageBox.No
     )
@@ -89,7 +89,7 @@ def check_ppsspp_assets(ra_exe_path, parent):
         return
         
     progress = QMessageBox(parent)
-    progress.setWindowTitle("Downloading PPSSPP Assets")
+    progress.setWindowTitle("Downloading PPSSPP Assets — Wingosy")
     progress.setText("Downloading...")
     progress.show()
     QApplication.processEvents()
@@ -116,49 +116,76 @@ def check_ppsspp_assets(ra_exe_path, parent):
         
         Path(tmp_path).unlink(missing_ok=True)
         progress.close()
-        QMessageBox.information(parent, "PPSSPP Assets Ready", "✅ Done.")
+        QMessageBox.information(parent, "PPSSPP Assets Ready — Wingosy", "✅ Done.")
     except Exception as e:
         progress.close()
-        QMessageBox.warning(parent, "Download Failed", str(e))
+        QMessageBox.warning(parent, "Download Failed — Wingosy", str(e))
 
-class GameDetailDialog(QDialog):
-    def __init__(self, game, client, config, main_window, parent=None):
+class GameDetailPanel(QWidget):
+    def __init__(self, game, client, config, main_window, on_close=None, parent=None):
         super().__init__(parent)
+        self._on_close = on_close
         self.game = game
         self.client = client
         self.config = config
         self.main_window = main_window
-        self.setWindowTitle(game.get("name"))
-        self.setFixedSize(800, 550)
+        
         self.dl_thread = None
         self.extract_thread = None
         self._conflict_shown = False
         self._is_windows = game.get("platform_slug") in WINDOWS_PLATFORM_SLUGS
         self._local_rom_path = self._get_local_rom_path()
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #1a1a1a;
+                color: #ffffff;
+            }
+            QLabel {
+                color: #ffffff;
+            }
+            QPushButton {
+                border-radius: 4px;
+            }
+            QScrollArea {
+                background: transparent;
+                border: none;
+            }
+        """)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # Header
+        main_layout.addWidget(self._build_header(game.get('name', '')))
+
+        # Content area
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(24, 20, 24, 20)
+        content_layout.setSpacing(10)
 
         title_label = QLabel(game.get('name'))
-        title_label.setStyleSheet("font-size: 20pt; font-weight: bold; color: #1e88e5;")
+        title_label.setStyleSheet("font-size: 20pt; font-weight: bold; color: #1e88e5; background: transparent;")
         title_label.setWordWrap(True)
-        layout.addWidget(title_label)
+        content_layout.addWidget(title_label)
 
-        content_layout = QHBoxLayout()
-        content_layout.setSpacing(25)
+        sub_layout = QHBoxLayout()
+        sub_layout.setSpacing(25)
 
         self.img_label = QLabel()
-        self.img_label.setFixedWidth(300)
-        self.img_label.setStyleSheet("background: #1a1a1a; border-radius: 6px;")
-        content_layout.addWidget(self.img_label)
+        self.img_label.setFixedWidth(280)
+        self.img_label.setStyleSheet("background: #111; border-radius: 6px;")
+        sub_layout.addWidget(self.img_label)
 
         self.right_column = QVBoxLayout()
         self.right_column.setSpacing(0)
 
-        self.right_column.addWidget(QLabel(f"<b>Platform:</b> {game.get('platform_display_name')}", styleSheet="font-size: 12pt; margin-bottom: 2px;"))
+        self.right_column.addWidget(QLabel(f"<b>Platform:</b> {game.get('platform_display_name')}", styleSheet="font-size: 12pt; margin-bottom: 2px; background: transparent;"))
 
         total_bytes = sum(f.get('file_size_bytes', 0) for f in game.get('files', []))
-        self.right_column.addWidget(QLabel(f"<b>Size:</b> {format_size(total_bytes)}", styleSheet="font-size: 12pt; margin-bottom: 8px;"))
+        self.right_column.addWidget(QLabel(f"<b>Size:</b> {format_size(total_bytes)}", styleSheet="font-size: 12pt; margin-bottom: 8px; background: transparent;"))
 
         self.desc_scroll = QScrollArea()
         self.desc_scroll.setWidgetResizable(True)
@@ -167,7 +194,7 @@ class GameDetailDialog(QDialog):
         self.desc_label = QLabel("Loading description...")
         self.desc_label.setWordWrap(True)
         self.desc_label.setAlignment(Qt.AlignTop)
-        self.desc_label.setStyleSheet("color: #ccc; font-size: 11pt; line-height: 1.4;")
+        self.desc_label.setStyleSheet("color: #ccc; font-size: 11pt; line-height: 1.4; background: transparent;")
         self.desc_scroll.setWidget(self.desc_label)
         self.right_column.addWidget(self.desc_scroll, 1)
 
@@ -189,6 +216,7 @@ class GameDetailDialog(QDialog):
 
         self.speed_label = QLabel()
         self.speed_label.setAlignment(Qt.AlignCenter)
+        self.speed_label.setStyleSheet("background: transparent;")
         self.right_column.addWidget(self.speed_label)
 
         self.actions_layout = QVBoxLayout()
@@ -196,7 +224,7 @@ class GameDetailDialog(QDialog):
         self.actions_layout.setSpacing(4)
 
         self.play_btn = QPushButton("▶ PLAY")
-        self.play_btn.setStyleSheet("background: #2e7d32; color: white; font-weight: bold; padding: 10px; font-size: 13pt;")
+        self.play_btn.setStyleSheet("background: #2e7d32; color: white; font-weight: bold; padding: 12px; font-size: 16pt;")
         self.play_btn.clicked.connect(self.play_game)
 
         self.gs_btn = QPushButton("⚙ Game Settings")
@@ -204,15 +232,15 @@ class GameDetailDialog(QDialog):
         self.gs_btn.clicked.connect(self.open_game_settings)
 
         self.un_btn = QPushButton("🗑 Uninstall")
-        self.un_btn.setStyleSheet("background: #8e0000; color: white; padding: 6px; font-size: 11pt;")
+        self.un_btn.setStyleSheet("background: #8e0000; color: white; padding: 8px; font-size: 13pt;")
         self.un_btn.clicked.connect(self.uninstall_game)
 
         self.dl_btn = QPushButton("⬇ DOWNLOAD")
-        self.dl_btn.setStyleSheet("background: #1565c0; color: white; font-weight: bold; padding: 10px; font-size: 13pt;")
+        self.dl_btn.setStyleSheet("background: #1565c0; color: white; font-weight: bold; padding: 12px; font-size: 16pt;")
         self.dl_btn.clicked.connect(self._on_download_clicked)
 
         self.can_btn = QPushButton("Cancel Download")
-        self.can_btn.setStyleSheet("background: #c62828; color: white;")
+        self.can_btn.setStyleSheet("background: #c62828; color: white; font-size: 12pt;")
         self.can_btn.setVisible(False)
         self.can_btn.clicked.connect(self.cancel_dl)
 
@@ -223,19 +251,52 @@ class GameDetailDialog(QDialog):
         self.actions_layout.addWidget(self.can_btn)
 
         self.right_column.addLayout(self.actions_layout)
-        content_layout.addLayout(self.right_column, 1)
-        layout.addLayout(content_layout)
+        sub_layout.addLayout(self.right_column, 1)
+        content_layout.addLayout(sub_layout)
 
         close_btn = QPushButton("Close")
-        close_btn.setStyleSheet("background: #333; color: #ccc; padding: 8px; font-size: 14pt;")
-        close_btn.clicked.connect(self.reject)
-        layout.addWidget(close_btn)
+        close_btn.setStyleSheet("background: #333; color: #ccc; padding: 10px; font-size: 16pt;")
+        close_btn.clicked.connect(self._close)
+        content_layout.addWidget(close_btn)
+
+        main_layout.addWidget(content, 1)
 
         # After building the UI, check registry
         self._reconnect_active_download()
             
         self._start_image_fetch()
         self._start_desc_fetch()
+
+    def _build_header(self, game_name):
+        header = QWidget()
+        header.setFixedHeight(44)
+        header.setStyleSheet("background: #111; border-bottom: 1px solid #222;")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(12, 0, 12, 0)
+        
+        back_btn = QPushButton("← Back to Library")
+        back_btn.setFixedWidth(180)
+        back_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: #888;
+                border: none;
+                font-size: 14px;
+                padding: 6px 10px;
+                text-align: left;
+            }
+            QPushButton:hover {
+                color: #ffffff;
+            }
+        """)
+        back_btn.clicked.connect(self._close)
+        hl.addWidget(back_btn)
+        hl.addStretch()
+        return header
+
+    def _close(self):
+        if self._on_close:
+            self._on_close()
 
     def _reconnect_active_download(self):
         rom_id = str(self.game["id"])
@@ -355,7 +416,7 @@ class GameDetailDialog(QDialog):
         rom_name = self.game.get('name', 'this game')
         if entry["type"] == "extraction":
             reply = QMessageBox.question(
-                self, "Cancel Extraction",
+                self, "Cancel Extraction — Wingosy",
                 f"Cancel extracting {rom_name}?\n\nWhat should happen to the files extracted so far?",
                 QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
                 QMessageBox.Cancel
@@ -370,7 +431,7 @@ class GameDetailDialog(QDialog):
                 entry["thread"].cancelled.connect(on_cancelled)
         else:
             reply = QMessageBox.question(
-                self, "Cancel Download",
+                self, "Cancel Download — Wingosy",
                 f"Cancel downloading {rom_name}?",
                 QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
                 QMessageBox.Cancel
@@ -391,12 +452,6 @@ class GameDetailDialog(QDialog):
         self.can_btn.hide()
         self.pbar.hide()
         self._update_button_states()
-
-    def closeEvent(self, event):
-        rom_id = str(self.game["id"])
-        if hasattr(self, '_progress_listener'):
-            download_registry.remove_listener(rom_id, self._progress_listener)
-        super().closeEvent(event)
 
     def _get_local_rom_path(self):
         if self._is_windows:
@@ -431,14 +486,16 @@ class GameDetailDialog(QDialog):
         
     def open_game_settings(self):
         from src.ui.dialogs.windows_settings import WindowsGameSettingsDialog
-        if WindowsGameSettingsDialog(self.game, self.config, self.main_window, self).exec() == QDialog.Accepted:
-            self._update_button_states()
+        dlg = WindowsGameSettingsDialog(self.game, self.config, self.main_window, self)
+        dlg.show()
+        # Keep reference
+        self._child_dlg = dlg
             
     def _start_image_fetch(self):
         url = self.client.get_cover_url(self.game)
         if url:
             self.it = ImageFetcher(self.game['id'], url)
-            self.it.finished.connect(lambda g, p: self.img_label.setPixmap(p.scaled(300, 420, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
+            self.it.finished.connect(lambda g, p: self.img_label.setPixmap(p.scaled(280, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
             self.it.finished.connect(lambda t=self.it: self.main_window.active_threads.remove(t) if t in self.main_window.active_threads else None)
             self.main_window.active_threads.append(self.it)
             self.it.start()
@@ -455,7 +512,7 @@ class GameDetailDialog(QDialog):
         if self._is_windows:
             msg = f"Permanently delete ALL files in:\n{self._local_rom_path}?"
             
-        if QMessageBox.question(self, "Uninstall", msg, QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+        if QMessageBox.question(self, "Uninstall — Wingosy", msg, QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             try:
                 p = self._local_rom_path
                 if p.exists():
@@ -467,7 +524,7 @@ class GameDetailDialog(QDialog):
                     self._update_button_states()
                     self.main_window.library_tab.apply_filters()
             except Exception as e:
-                QMessageBox.critical(self, "Error", str(e))
+                QMessageBox.critical(self, "Error — Wingosy", str(e))
                 
     def _on_download_clicked(self):
         windows_dir = self.config.get("windows_games_dir", "")
@@ -494,7 +551,7 @@ class GameDetailDialog(QDialog):
             # 1. Check if already installed
             if extracted_dir.exists() and any(extracted_dir.rglob("*.exe")):
                 QMessageBox.information(
-                    self, "Already Installed",
+                    self, "Already Installed — Wingosy",
                     f"{self.game['name']} appears to already be installed at:\n{extracted_dir}\n\nUse the Play button to launch it."
                 )
                 self._update_button_states()
@@ -503,7 +560,7 @@ class GameDetailDialog(QDialog):
             # 2. Check if archive exists
             if archive_path.exists():
                 reply = QMessageBox.question(
-                    self, "Archive Already Downloaded",
+                    self, "Archive Already Downloaded — Wingosy",
                     f"{rom_name} already exists in your Windows Games folder.\n\nWould you like to extract it now instead of downloading again?",
                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
                     QMessageBox.Yes
@@ -602,7 +659,7 @@ class GameDetailDialog(QDialog):
             elif behavior == "ask":
                 self._conflict_shown = True
                 msg = QMessageBox(self)
-                msg.setWindowTitle(f"Conflict — {title}")
+                msg.setWindowTitle(f"Conflict — {title} — Wingosy")
                 msg.setText(f"Local {file_type} differs from cloud.")
                 keep_local = msg.addButton("Keep Local", QMessageBox.RejectRole)
                 use_cloud = msg.addButton("Use Cloud", QMessageBox.AcceptRole)
@@ -651,7 +708,7 @@ class GameDetailDialog(QDialog):
     def play_game(self):
         local_rom = self._local_rom_path
         if not local_rom or not local_rom.exists():
-            QMessageBox.warning(self, "Error", "Download the game first.")
+            QMessageBox.warning(self, "Error — Wingosy", "Download the game first.")
             return
             
         emu_data = None
@@ -669,7 +726,7 @@ class GameDetailDialog(QDialog):
             emu_data = next((e for e in all_emus if e["id"] == "retroarch"), None)
             
         if not emu_data or (not emu_data.get("is_native") and (not emu_data.get("executable_path") or not os.path.exists(emu_data["executable_path"]))):
-            QMessageBox.warning(self, "Error", "No valid emulator configured.")
+            QMessageBox.warning(self, "Error — Wingosy", "No valid emulator configured.")
             return
             
         self.main_window.log(f"🎮 Preparing {self.game.get('name')}...")
@@ -700,16 +757,18 @@ class GameDetailDialog(QDialog):
                             elif len(exes) > 1:
                                 from src.ui.dialogs.emulator_editor import ExePickerDialog
                                 picker = ExePickerDialog(exes, self.game.get("name"), self)
-                                if picker.exec() == QDialog.Accepted:
-                                    exe_to_launch = picker.selected_exe
+                                picker.show()
+                                # Keep reference
+                                self._child_dlg = picker
+                                return # Launching happens after picking
                 
                 if not exe_to_launch:
-                    QMessageBox.warning(self, "Error", "No game executable found.")
+                    QMessageBox.warning(self, "Error — Wingosy", "No game executable found.")
                     return
 
                 self.main_window.log(f"🚀 Launching Windows Game: {os.path.basename(exe_to_launch)}")
                 proc = subprocess.Popen([exe_to_launch], cwd=os.path.dirname(exe_to_launch))
-                self.accept()
+                self._close()
                 if self.main_window.watcher:
                     self.main_window.watcher.track_session(proc, emu_data["name"], self.game, exe_to_launch, exe_to_launch)
                 return
@@ -723,7 +782,7 @@ class GameDetailDialog(QDialog):
                     if core_path.exists():
                         args = [exe_path, "-L", str(core_path), str(local_rom)]
                     else:
-                        if QMessageBox.question(self, "Error", f"Core {core_name} missing. Download?") == QMessageBox.Yes:
+                        if QMessageBox.question(self, "Error — Wingosy", f"Core {core_name} missing. Download?") == QMessageBox.Yes:
                             self.start_core_download(core_name, Path(exe_path).parent, platform)
                         return
                 else:
@@ -743,14 +802,14 @@ class GameDetailDialog(QDialog):
             self.main_window.log(f"🚀 Launched {emu_data['name']} (PID: {proc.pid})")
             if self.main_window.watcher:
                 QTimer.singleShot(0, lambda: self.main_window.watcher.track_session(proc, emu_data["name"], self.game, str(local_rom), exe_path))
-            self.accept()
+            self._close()
         except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+            QMessageBox.critical(self, "Error — Wingosy", str(e))
             
     def start_core_download(self, core_name, emu_dir, platform):
         from src.ui.threads import CoreDownloadThread
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"Downloading {core_name}")
+        dlg = QDialog(self) # Still modal for core DL
+        dlg.setWindowTitle(f"Downloading {core_name} — Wingosy")
         dlg.setFixedSize(350, 100)
         l = QVBoxLayout(dlg)
         status = QLabel(f"Downloading for {platform}...")
@@ -761,6 +820,8 @@ class GameDetailDialog(QDialog):
         
         t = CoreDownloadThread(core_name, emu_dir / "cores")
         t.progress.connect(lambda v, s: (pb.setValue(v), status.setText(f"Speed: {format_speed(s)}")))
-        t.finished.connect(lambda success, msg: (dlg.close(), self.play_game() if success else QMessageBox.critical(self, "Error", msg)))
+        t.finished.connect(lambda success, msg: (dlg.close(), self.play_game() if success else QMessageBox.critical(self, "Error — Wingosy", msg)))
         t.start()
         dlg.exec()
+
+GameDetailDialog = GameDetailPanel
