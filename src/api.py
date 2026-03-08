@@ -71,12 +71,8 @@ class RomMClient:
         """Save fetched library to disk for instant startup next time."""
         try:
             self.library_cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_data = {
-                "timestamp": time.time(),
-                "games": games
-            }
             with open(self.library_cache_path, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f)
+                json.dump(games, f)
         except Exception as e:
             print(f"[Cache] Save error: {e}")
 
@@ -86,9 +82,9 @@ class RomMClient:
             if not self.library_cache_path.exists():
                 return None, 0
             with open(self.library_cache_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            age = time.time() - data.get("timestamp", 0)
-            return data.get("games", []), age
+                games = json.load(f)
+            # We no longer track age in the simplified list format, return 0
+            return games, 0
         except Exception:
             return None, 0
 

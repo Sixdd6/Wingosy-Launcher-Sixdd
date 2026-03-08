@@ -2,6 +2,7 @@ import os
 import sys
 import shutil
 import zipfile
+import logging
 from pathlib import Path
 
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -10,7 +11,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QMessageBox, QDialog, QLineEdit, QDialogButtonBox, 
                              QScrollArea)
 from PySide6.QtGui import QIcon, QPixmap, QKeySequence, QShortcut
-from PySide6.QtCore import Qt, QSettings, Slot, Signal, QThread, QTimer
+from PySide6.QtCore import Qt, QSettings, Slot, Signal, QThread, QTimer, QEvent
 
 from src.ui.threads import (ImageFetcher, BiosDownloader, DolphinDownloader, 
                             DirectDownloader, GithubDownloader, ConflictResolveThread)
@@ -64,6 +65,8 @@ class LibraryFetchWorker(QThread):
         # Final result emission (used for final cache and cleanup)
         self.finished.emit(result)
 
+from src.ui.title_bar import WingosyTitleBar
+
 class WingosyMainWindow(QMainWindow):
     def __init__(self, config_manager, client, watcher_class, version):
         super().__init__()
@@ -74,6 +77,11 @@ class WingosyMainWindow(QMainWindow):
         self.active_image_fetchers = []
         self.fetch_generation = 0
         self.all_games = []
+        
+        # Frameless window setup
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        
         self.setWindowTitle("Wingosy Launcher")
         self.resize(1100, 800)
         
@@ -89,6 +97,18 @@ class WingosyMainWindow(QMainWindow):
         self.setup_ui()
         self.setup_tray()
         self.ensure_watcher_running()
+
+        # 1. Load cache immediately — show games NOW
+        self._load_library_from_cache()
+        # 2. Then fetch fresh data in background
+        QTimer.singleShot(500, self.fetch_library_and_populate)
+
+        # Edge resize support
+
+        self.setMouseTracking(True)
+        self.centralWidget().setMouseTracking(True)
+        self._resize_border = 8
+        self.installEventFilter(self)
         
         if self.config.data.get("keyring_failed"):
             QMessageBox.warning(
@@ -106,48 +126,146 @@ class WingosyMainWindow(QMainWindow):
 
     def setup_ui(self):
         central_widget = QWidget()
+        central_widget.setObjectName("centralWidget")
+        central_widget.setStyleSheet("#centralWidget { background: #1a1a1a; border-radius: 10px; border: 1px solid #333; }")
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # Custom Title Bar
+        self.title_bar = WingosyTitleBar(self)
+        self.title_bar.tab_changed.connect(self._on_tab_changed)
+        self.title_bar.settings_requested.connect(self.open_settings)
+        main_layout.addWidget(self.title_bar)
         
-        header_layout = QHBoxLayout()
-        header_layout.addWidget(QLabel("<h1 style='color: #1e88e5;'>Wingosy Launcher</h1>"))
-        header_layout.addStretch()
-        
-        self.settings_btn = QPushButton("⚙️ Settings")
-        self.settings_btn.clicked.connect(self.open_settings)
-        header_layout.addWidget(self.settings_btn)
-        main_layout.addLayout(header_layout)
+        # Update connection status
+        host = self.config.get("host", "")
+        self.title_bar.update_connection_status("connected" if self.client.token else "disconnected", host)
 
         self.tabs = QTabWidget()
+        self.tabs.tabBar().hide() # Hide default tab bar
         self.tabs.setStyleSheet("""
-            QTabBar::tab { background: #2d2d2d; color: white; padding: 10px; }
-            QTabBar::tab:selected { background: #1e1e1e; border-bottom: 2px solid #1e88e5; }
+            QTabWidget::pane { border: none; background: #1a1a1a; }
         """)
-        
+
         self.library_tab = LibraryTab(self)
-        self.tabs.addTab(self.library_tab, "🎮 Library")
-        
+        self.tabs.addTab(self.library_tab, "Library")
+
         self.emulators_tab = EmulatorsTab(self)
-        self.tabs.addTab(self.emulators_tab, "🎮 Emulators")
-        
+        self.tabs.addTab(self.emulators_tab, "Emulators")
+
         # Logs & Downloads Tab
         self.info_tabs = QTabWidget()
+        self.info_tabs.setStyleSheet("QTabWidget::pane { border: none; }")
         self.download_queue = DownloadQueueWidget()
-        self.info_tabs.addTab(self.download_queue, "📥 Downloads")
-        
+        self.info_tabs.addTab(self.download_queue, "Downloads")        
+
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
-        self.log_area.setStyleSheet("background: #121212; color: #bbdefb; font-family: Consolas;")
-        self.info_tabs.addTab(self.log_area, "📝 Logs")
+        self.log_area.setStyleSheet("background: #121212; color: #bbdefb; font-family: Consolas; border: none;")
+        self.info_tabs.addTab(self.log_area, "Logs")
+
+        self.tabs.addTab(self.info_tabs, "Logs")
         
-        self.tabs.addTab(self.info_tabs, "📊 info")
         main_layout.addWidget(self.tabs)
-        
-        # Shortcuts
-        QShortcut(QKeySequence("Ctrl+F"), self, activated=self.library_tab.search_input.setFocus)
-        QShortcut(QKeySequence("F5"), self, activated=self.fetch_library_and_populate)
-        
-        self.fetch_library_and_populate()
+
+    def _on_tab_changed(self, index):
+        self.tabs.setCurrentIndex(index)
+        self.title_bar.set_active_tab(index)
+
+    def eventFilter(self, obj, event):
+        # MUST call super() and return immediately for any object that isn't self
+        if obj is not self:
+            return super().eventFilter(obj, event)
+            
+        if (event.type() == QEvent.Type.MouseMove
+                and not self.isMaximized()):
+            try:
+                pos = event.position().toPoint()
+                edge = self._get_edge(pos)
+                self._update_cursor(edge)
+            except Exception:
+                pass
+        return super().eventFilter(obj, event)
+
+    def _load_library_from_cache(self):
+        """Load library_cache.json synchronously on startup for instant display."""
+        import json
+        cache_path = Path.home() / ".wingosy" / "library_cache.json"
+        if not cache_path.exists():
+            return
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # Validate — must be a list of dicts
+            if not isinstance(data, list):
+                logging.warning("[Library] Cache invalid format — skipping")
+                return
+
+            # Filter out any non-dict entries
+            games = [g for g in data if isinstance(g, dict)]
+
+            if not games:
+                logging.warning("[Library] Cache empty or all entries invalid")
+                return
+
+            self.all_games = games
+            self._update_platform_filter(games)
+            self.library_tab.populate_games(
+                games,
+                status=f"📚 Loaded from cache ({len(games)} games)"
+            )
+            logging.info(f"[Library] Cache loaded: {len(games)} games")
+        except Exception as e:
+            logging.warning(f"[Library] Cache load failed: {e}")
+
+    def _get_edge(self, pos):
+        edges = []
+        b = self._resize_border
+        if pos.x() < b:
+            edges.append(Qt.Edge.LeftEdge)
+        if pos.x() > self.width() - b:
+            edges.append(Qt.Edge.RightEdge)
+        if pos.y() < b:
+            edges.append(Qt.Edge.TopEdge)
+        if pos.y() > self.height() - b:
+            edges.append(Qt.Edge.BottomEdge)
+        return edges
+
+    def _update_cursor(self, edges):
+        left  = Qt.Edge.LeftEdge  in edges
+        right = Qt.Edge.RightEdge in edges
+        top   = Qt.Edge.TopEdge   in edges
+        bot   = Qt.Edge.BottomEdge in edges
+
+        if (left and top) or (right and bot):
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        elif (right and top) or (left and bot):
+            self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+        elif left or right:
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+        elif top or bot:
+            self.setCursor(Qt.CursorShape.SizeVerCursor)
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def mousePressEvent(self, event):
+        if (event.button() == Qt.MouseButton.LeftButton
+                and not self.isMaximized()):
+            edges = self._get_edge(event.position().toPoint())
+            if edges:
+                combined = edges[0]
+                for e in edges[1:]:
+                    combined = combined | e
+                try:
+                    self.windowHandle().startSystemResize(combined)
+                    event.accept()
+                    return
+                except Exception:
+                    pass
+        super().mousePressEvent(event)
 
     def _on_image_fetched(self, fetcher, generation=None):
         if generation is not None and generation != self.fetch_generation:

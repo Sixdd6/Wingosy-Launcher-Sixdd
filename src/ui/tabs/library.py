@@ -1,35 +1,86 @@
 import os
+import logging
+import ctypes
+import sys
 from pathlib import Path
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QPushButton, QLineEdit, QScrollArea, QGridLayout, 
-                             QComboBox, QSizePolicy)
-from PySide6.QtCore import Qt, Signal, QTimer, QEvent
-from PySide6.QtGui import QPixmap, QImage
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,   
+                             QPushButton, QLineEdit, QScrollArea, QGridLayout,
+                             QComboBox, QSizePolicy, QAbstractItemView, QGraphicsDropShadowEffect)
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QPixmap, QImage, QColor
 
 from src.ui.threads import ImageFetcher
 from src.ui.widgets import format_speed, elide_text
 from src.platforms import RETROARCH_PLATFORMS, platform_matches
 from src import emulators
 
+# XInput constants for Windows gamepad support
+XINPUT_GAMEPAD_DPAD_UP    = 0x0001
+XINPUT_GAMEPAD_DPAD_DOWN  = 0x0002
+XINPUT_GAMEPAD_DPAD_LEFT  = 0x0004
+XINPUT_GAMEPAD_DPAD_RIGHT = 0x0008
+XINPUT_GAMEPAD_A          = 0x1000
+XINPUT_GAMEPAD_B          = 0x2000
+
+class XINPUT_GAMEPAD(ctypes.Structure):
+    _fields_ = [
+        ("wButtons", ctypes.c_ushort),
+        ("bLeftTrigger", ctypes.c_ubyte),
+        ("bRightTrigger", ctypes.c_ubyte),
+        ("sThumbLX", ctypes.c_short),
+        ("sThumbLY", ctypes.c_short),
+        ("sThumbRX", ctypes.c_short),
+        ("sThumbRY", ctypes.c_short),
+    ]
+
+class XINPUT_STATE(ctypes.Structure):
+    _fields_ = [
+        ("dwPacketNumber", ctypes.c_ulong),
+        ("Gamepad", XINPUT_GAMEPAD),
+    ]
+
+class SmoothScrollArea(QScrollArea):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._scroll_animation = QPropertyAnimation(self.verticalScrollBar(), b"value")
+        self._scroll_animation.setDuration(180)
+        self._scroll_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self._target_value = 0
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        step = 120  # pixels per scroll tick
+        self._target_value = max(
+            self.verticalScrollBar().minimum(),
+            min(
+                self.verticalScrollBar().maximum(),
+                (self._target_value if self._scroll_animation.state() == QPropertyAnimation.Running else self.verticalScrollBar().value()) - (delta / 120 * step)
+            )
+        )
+        self._scroll_animation.stop()
+        self._scroll_animation.setStartValue(self.verticalScrollBar().value())
+        self._scroll_animation.setEndValue(int(self._target_value))
+        self._scroll_animation.start()
+
 class GameCard(QWidget):
     clicked = Signal(object)
     def __init__(self, game, client, config, sync_cache):
         super().__init__()
         self.game, self.client, self.config, self.sync_cache = game, client, config, sync_cache
-        self.setStyleSheet("""
-            QWidget { background: #1e1e1e; border-radius: 8px; }
-            QWidget:hover { background: #2c2c2c; border: 2px solid #1565c0; }
-        """)
+        self._selected = False
+        
+        self.update_style()
+        
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
-        
+
         self.img_label = QLabel()
         self.img_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.img_label)
-        
+
         # State Indicators
         rom_exists = game.get('_local_exists', False)
-        
+
         if rom_exists:
             self.local_indicator = QLabel("✓", self)
             self.local_indicator.setStyleSheet("""
@@ -44,7 +95,7 @@ class GameCard(QWidget):
             self.local_indicator.setAlignment(Qt.AlignCenter)
             self.local_indicator.move(4, 4)
             self.local_indicator.show()
-        
+
         has_cloud_save = str(game.get('id', '')) in sync_cache
         if has_cloud_save:
             self.cloud_indicator = QLabel("☁", self)
@@ -60,17 +111,41 @@ class GameCard(QWidget):
             self.cloud_indicator.setAlignment(Qt.AlignCenter)
             self.cloud_indicator.move(22, 4)
             self.cloud_indicator.show()
-        
+
         self.title_label = QLabel()
         self.title_label.setAlignment(Qt.AlignCenter)
         self.title_label.setStyleSheet("color: white; font-weight: bold; border: none;")
         self.title_label.setWordWrap(False)
         self.title_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.title_label.setText(elide_text(game.get('name', 'Unknown')))
+        self.title_label.setText(elide_text(game.get('name', 'Unknown')))   
         self.title_label.setToolTip(game.get('name', 'Unknown'))
         layout.addWidget(self.title_label)
         self.fetcher = None
         self._full_pixmap = None
+
+    def set_selected(self, selected):
+        self._selected = selected
+        if selected:
+            shadow = QGraphicsDropShadowEffect(self)
+            shadow.setBlurRadius(20)
+            shadow.setColor(QColor(13, 110, 253, 150))
+            shadow.setOffset(0, 0)
+            self.setGraphicsEffect(shadow)
+        else:
+            self.setGraphicsEffect(None)
+        self.update_style()
+
+    def update_style(self):
+        border = "2px solid #0d6efd" if self._selected else "none"
+        bg = "#2c2c2c" if self._selected else "#1e1e1e"
+        self.setStyleSheet(f"""
+            GameCard {{ 
+                background: {bg}; 
+                border-radius: 8px; 
+                border: {border};
+            }}
+            GameCard:hover {{ background: #2c2c2c; border: 2px solid #1565c0; }}
+        """)
 
     def start_image_fetch(self, main_window, generation):
         url = self.client.get_cover_url(self.game)
@@ -93,7 +168,7 @@ class GameCard(QWidget):
                     Qt.SmoothTransformation)
             )
 
-    def mouseReleaseEvent(self, event): 
+    def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.clicked.emit(self.game)
 
@@ -103,55 +178,57 @@ class LibraryTab(QWidget):
         self.main_window = main_window
         self.client = main_window.client
         self.config = main_window.config
-        self._all_cards = []       # all GameCard widgets currently in grid
+        self._all_cards = []       # all GameCard widgets currently in grid 
         self._render_generation = 0  # incremented to cancel in-flight renders
         self._loading_label = None
         self._pending_games = []    # games not yet rendered
-        self._load_more_label = None  # "Load more..." indicator at bottom
+        self._load_more_label = None  # "Load more..." indicator at bottom  
         self.LOAD_BATCH = 200
-        self._is_loading_batch = False  # guard against concurrent loads
+        self._is_loading_batch = False  # guard against concurrent loads    
         self._total_server_games = 0
         self._loaded_count = 0
-        
+        self._selected_index = -1
+
         self._scroll_debounce = QTimer()
         self._scroll_debounce.setSingleShot(True)
         self._scroll_debounce.setInterval(150)  # ms cooldown
         self._scroll_debounce.timeout.connect(self._do_load_batch)
-        
+
         layout = QVBoxLayout(self)
-        
+        layout.setContentsMargins(10, 10, 10, 10)
+
         # Filter controls
         filter_layout = QHBoxLayout()
         filter_layout.addWidget(QLabel("Search:"))
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Filter games (Ctrl+F)...")
+        self.search_input.setPlaceholderText("Filter games (Ctrl+F)...")    
         self.search_input.textChanged.connect(self.apply_filters)
         filter_layout.addWidget(self.search_input)
-        
+
         filter_layout.addWidget(QLabel("Platform:"))
         self.platform_filter = QComboBox()
         self.platform_filter.addItem("All Platforms")
-        self.platform_filter.currentTextChanged.connect(self.apply_filters)
+        self.platform_filter.currentTextChanged.connect(self.apply_filters) 
         filter_layout.addWidget(self.platform_filter)
-        
+
         self.refresh_btn = QPushButton("🔄 Refresh")
         self.refresh_btn.clicked.connect(lambda: self.main_window.fetch_library_and_populate(force_refresh=True))
         filter_layout.addWidget(self.refresh_btn)
-        
+
         self.retry_btn = QPushButton("⚠️ Retry")
         self.retry_btn.setStyleSheet("background: #e65100; color: white; padding: 4px 10px;")
         self.retry_btn.setVisible(False)
         self.retry_btn.clicked.connect(lambda: self.main_window.fetch_library_and_populate(force_refresh=True))
         filter_layout.addWidget(self.retry_btn)
-        
+
         layout.addLayout(filter_layout)
 
         # Grid area
         self.grid_widget = QWidget()
         self.grid_layout = QGridLayout(self.grid_widget)
         self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        
-        self.scroll_area = QScrollArea()
+
+        self.scroll_area = SmoothScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setWidget(self.grid_widget)
         # Connect scroll event to lazy loader
@@ -161,7 +238,7 @@ class LibraryTab(QWidget):
         self._resize_debounce = QTimer()
         self._resize_debounce.setSingleShot(True)
         self._resize_debounce.setInterval(80)
-        self._resize_debounce.timeout.connect(self._resize_all_cards)
+        self._resize_debounce.timeout.connect(self._resize_all_cards)       
 
         layout.addWidget(self.scroll_area)
 
@@ -171,6 +248,117 @@ class LibraryTab(QWidget):
         self.status_label.setStyleSheet("color: #bbb; padding: 5px; background: #222; border-top: 1px solid #333;")
         self.status_label.setVisible(False)
         layout.addWidget(self.status_label)
+        
+        # Gamepad support via XInput polling
+        self._last_buttons = 0
+        self._last_axis = [0.0, 0.0]
+        self.gamepad_timer = QTimer(self)
+        self.gamepad_timer.timeout.connect(self._poll_gamepad)
+        if sys.platform == 'win32':
+            try:
+                self.xinput = ctypes.windll.xinput1_4
+                self.gamepad_timer.start(100) # 100ms polling
+            except Exception:
+                try:
+                    self.xinput = ctypes.windll.xinput1_3
+                    self.gamepad_timer.start(100)
+                except Exception:
+                    logging.debug("[Library] XInput unavailable — gamepad support disabled")
+        else:
+            logging.debug("[Library] Gamepad support currently only available on Windows via XInput")
+
+    def _poll_gamepad(self):
+        state = XINPUT_STATE()
+        res = self.xinput.XInputGetState(0, ctypes.byref(state))
+        if res != 0: # Controller disconnected
+            return
+
+        buttons = state.Gamepad.wButtons
+        
+        # Check for button presses (current frame vs last frame)
+        def pressed(mask):
+            return (buttons & mask) and not (self._last_buttons & mask)
+
+        if pressed(XINPUT_GAMEPAD_DPAD_LEFT):
+            self._on_nav_key(Qt.Key_Left)
+        elif pressed(XINPUT_GAMEPAD_DPAD_RIGHT):
+            self._on_nav_key(Qt.Key_Right)
+        elif pressed(XINPUT_GAMEPAD_DPAD_UP):
+            self._on_nav_key(Qt.Key_Up)
+        elif pressed(XINPUT_GAMEPAD_DPAD_DOWN):
+            self._on_nav_key(Qt.Key_Down)
+        elif pressed(XINPUT_GAMEPAD_A):
+            self._on_nav_key(Qt.Key_Return)
+        elif pressed(XINPUT_GAMEPAD_B):
+            self._on_nav_key(Qt.Key_Escape)
+
+        # Stick deadzone logic
+        def normalize_stick(val):
+            # Normalize -32768 to 32767 -> -1.0 to 1.0
+            if abs(val) < 8000: return 0.0 # deadzone
+            return val / 32767.0
+
+        stick_x = normalize_stick(state.Gamepad.sThumbLX)
+        stick_y = normalize_stick(state.Gamepad.sThumbLY)
+
+        if abs(stick_x) > 0.5 and abs(self._last_axis[0]) <= 0.5:
+            self._on_nav_key(Qt.Key_Right if stick_x > 0 else Qt.Key_Left)
+        if abs(stick_y) > 0.5 and abs(self._last_axis[1]) <= 0.5:
+            self._on_nav_key(Qt.Key_Down if stick_y < 0 else Qt.Key_Up) # Y is inverted
+
+        self._last_buttons = buttons
+        self._last_axis = [stick_x, stick_y]
+
+    def keyPressEvent(self, event):
+        if self._on_nav_key(event.key()):
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def _on_nav_key(self, key):
+        if not self._all_cards: return False
+        
+        visible_cards = [c for c in self._all_cards if c.isVisible()]
+        if not visible_cards: return False
+        
+        if self._selected_index == -1:
+            if key in [Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down]:
+                self._select_card(0, visible_cards)
+                return True
+            return False
+
+        _, _, cols = self._get_card_size()
+        idx = self._selected_index
+        
+        if key == Qt.Key_Right:
+            idx = min(len(visible_cards) - 1, idx + 1)
+        elif key == Qt.Key_Left:
+            idx = max(0, idx - 1)
+        elif key == Qt.Key_Down:
+            idx = min(len(visible_cards) - 1, idx + cols)
+        elif key == Qt.Key_Up:
+            idx = max(0, idx - cols)
+        elif key == Qt.Key_Return:
+            self.open_detail(visible_cards[idx].game)
+            return True
+        elif key == Qt.Key_Escape:
+            self._select_card(-1, visible_cards)
+            return True
+        else:
+            return False
+            
+        self._select_card(idx, visible_cards)
+        return True
+
+    def _select_card(self, index, visible_cards):
+        if self._selected_index != -1 and self._selected_index < len(visible_cards):
+            visible_cards[self._selected_index].set_selected(False)
+            
+        self._selected_index = index
+        if index != -1:
+            card = visible_cards[index]
+            card.set_selected(True)
+            self.scroll_area.ensureWidgetVisible(card)
 
     def set_status(self, text, color=None):
         if not text:
@@ -184,12 +372,12 @@ class LibraryTab(QWidget):
         self.status_label.setVisible(True)
 
     def append_batch(self, games):
-        """Append a batch of games to the grid without full re-render."""
+        """Append a batch of games to the grid without full re-render."""   
         sync_cache = (self.main_window.watcher.sync_cache
                       if self.main_window.watcher else {})
-        
+
         card_w, card_h, cols_per_row = self._get_card_size()
-        
+
         self.grid_widget.setUpdatesEnabled(False)
         try:
             total_so_far = len(self._all_cards)
@@ -203,19 +391,19 @@ class LibraryTab(QWidget):
             for game in games:
                 # Filter check
                 matches_search = not text or text in game.get('name', '').lower() or text in game.get('fs_name', '').lower()
-                matches_platform = (platform == "All Platforms" 
-                                   or game.get('platform_display_name') == platform 
+                matches_platform = (platform == "All Platforms"
+                                   or game.get('platform_display_name') == platform
                                    or game.get('platform_slug') == platform)
-                
+
                 if matches_search and matches_platform:
                     card = GameCard(game, self.client, self.config, sync_cache)
                     card.clicked.connect(lambda g=game: self.open_detail(g))
                     card.setFixedSize(card_w, card_h)
-                    card.img_label.setFixedSize(card_w - 10, card_h - 30)
+                    card.img_label.setFixedSize(card_w - 10, card_h - 30)   
                     card.title_label.setFixedWidth(card_w - 10)
                     self.grid_layout.addWidget(card, row, col)
                     self._all_cards.append(card)
-                    
+
                     col += 1
                     if col >= cols_per_row:
                         col = 0
@@ -226,14 +414,14 @@ class LibraryTab(QWidget):
     def _get_card_size(self):
         """Compute card width/height based on viewport width and cols setting."""
         cols = max(1, int(self.config.get("cards_per_row", 6)))
-        spacing = self.grid_layout.horizontalSpacing() * (cols - 1) + 12
+        spacing = self.grid_layout.horizontalSpacing() * (cols - 1) + 20    
         available = self.scroll_area.viewport().width() - spacing
         w = max(100, available // cols)
         h = int(w * 1.5)
         return w, h, cols
 
     def _resize_all_cards(self):
-        """Resize every rendered card to match current viewport width."""
+        """Resize every rendered card to match current viewport width."""   
         if not self._all_cards:
             return
         w, h, cols = self._get_card_size()
@@ -254,11 +442,14 @@ class LibraryTab(QWidget):
         finally:
             self.grid_widget.setUpdatesEnabled(True)
 
-    def eventFilter(self, source, event):
-        if (source is self.scroll_area.viewport()
-                and event.type() == QEvent.Resize):
-            self._resize_debounce.start()
-        return super().eventFilter(source, event)
+    def eventFilter(self, obj, event):
+        try:
+            if (obj is self.scroll_area.viewport()
+                    and event.type() == QEvent.Type.Resize):
+                self._resize_debounce.start()
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
 
     def _on_scroll(self, value):
         """Debounce scroll events before loading next batch."""
@@ -269,7 +460,7 @@ class LibraryTab(QWidget):
         if max_val <= 0:
             return
         if value >= max_val * 0.60:
-            # Restart the debounce timer — only fires after 150ms of 
+            # Restart the debounce timer — only fires after 150ms of      
             # no scroll events, preventing rapid-fire batch loads
             self._scroll_debounce.start()
 
@@ -283,14 +474,14 @@ class LibraryTab(QWidget):
         if max_val <= 0 or value < max_val * 0.60:
             return
 
-        print(f"[Library] Threshold hit — loading next batch. "
-              f"Pending: {len(self._pending_games)}")
+        print(f"[Library] Threshold hit — loading next batch. Pending: {len(self._pending_games)}")
         self._is_loading_batch = True
         self._render_next_batch()
 
     def apply_filters(self):
         text = self.search_input.text().lower()
         platform = self.platform_filter.currentText()
+        self._selected_index = -1 # Reset selection on filter
 
         # Build filtered game list
         if platform == "⚠️ No Emulator":
@@ -321,33 +512,40 @@ class LibraryTab(QWidget):
         )
 
         if not platform_changed and self._all_cards:
-            # Same platform — just show/hide existing cards by game id
+            # Same platform — just show/hide existing cards by game id    
             filtered_ids = set(g.get('id') for g in filtered)
             for card in self._all_cards:
                 try:
                     visible = card.game.get('id') in filtered_ids
                     card.setVisible(visible)
+                    card.set_selected(False)
                 except RuntimeError:
                     pass
         else:
             # Platform changed — rebuild grid
             self.populate_grid(filtered)
 
-        print(f"[Library] Filter → {len(filtered)} games "
-              f"(platform='{platform}' search='{text}')")
+        print(f"[Library] Filter → {len(filtered)} games (platform='{platform}' search='{text}')")
+
+    def populate_games(self, games, status=None):
+        """Standard method to populate the grid from a list of games."""
+        self.populate_grid(games)
+        if status:
+            self.set_status(status)
 
     def populate_grid(self, games):
-        # Increment generation — any pending render callbacks will 
+        # Increment generation — any pending render callbacks will        
         # check this and abort immediately
         self._render_generation += 1
         my_gen = self._render_generation
         self.main_window.image_fetch_queue = []
         self.retry_btn.setVisible(False)
         self._all_cards = []
-        self._pending_games = list(games)  # full list, render in batches
+        self._pending_games = list(games)  # full list, render in batches   
         self._scroll_debounce.stop()  # cancel any pending debounce on grid reset
         self._is_loading_batch = False
         self._current_platform = self.platform_filter.currentText()
+        self._selected_index = -1
 
         # Clear grid — use deleteLater for safety
         while self.grid_layout.count():
@@ -367,7 +565,7 @@ class LibraryTab(QWidget):
         self._render_next_batch(my_gen)
 
     def _render_next_batch(self, generation=None):
-        """Render the next LOAD_BATCH pending games into the grid."""
+        """Render the next LOAD_BATCH pending games into the grid."""       
         # Use current generation if not specified
         if generation is None:
             generation = self._render_generation
@@ -412,10 +610,10 @@ class LibraryTab(QWidget):
                 if generation != self._render_generation:
                     return
 
-                card = GameCard(game, self.client, self.config, sync_cache)
-                card.clicked.connect(lambda g=game: self.open_detail(g))
+                card = GameCard(game, self.client, self.config, sync_cache) 
+                card.clicked.connect(lambda g=game: self.open_detail(g))    
                 card.setFixedSize(card_w, card_h)
-                card.img_label.setFixedSize(card_w - 10, card_h - 30)
+                card.img_label.setFixedSize(card_w - 10, card_h - 30)       
                 card.title_label.setFixedWidth(card_w - 10)
                 self.grid_layout.addWidget(card, row, col)
                 self._all_cards.append(card)
@@ -426,10 +624,9 @@ class LibraryTab(QWidget):
         finally:
             self.grid_widget.setUpdatesEnabled(True)
 
-        print(f"[Library] Cards: {len(self._all_cards)} loaded, "
-              f"{len(self._pending_games)} pending")
+        print(f"[Library] Cards: {len(self._all_cards)} loaded, {len(self._pending_games)} pending")
 
-        # Queue image fetches for newly added cards (first 12 overall only)
+        # Queue image fetches for newly added cards (first 12 overall only) 
         self.main_window.fetch_generation += 1
         my_fetch_gen = self.main_window.fetch_generation
         start_idx = len(self._all_cards) - len(batch)
@@ -439,25 +636,22 @@ class LibraryTab(QWidget):
                 fetcher = card.start_image_fetch(
                     self.main_window, my_fetch_gen)
                 if fetcher:
-                    self.main_window.active_image_fetchers.append(fetcher)
+                    self.main_window.active_image_fetchers.append(fetcher)  
             else:
                 self.main_window.image_fetch_queue.append(card)
 
-        # If more games remain, add a load-more indicator at the bottom
+        # If more games remain, add a load-more indicator at the bottom     
         if self._pending_games:
             remaining = len(self._pending_games)
-            self._load_more_label = QLabel(
-                f"⬇ Scroll down to load {remaining} more games...")
+            self._load_more_label = QLabel(f"⬇ Scroll down to load {remaining} more games...")       
             self._load_more_label.setAlignment(Qt.AlignCenter)
             self._load_more_label.setStyleSheet(
                 "color: #1e88e5; font-size: 13px; "
                 "padding: 20px; background: #1a1a1a;")
             next_row = (len(self._all_cards) + cols_per_row - 1) // cols_per_row
             self.grid_layout.addWidget(
-                self._load_more_label, next_row, 0, 1, cols_per_row)
+                self._load_more_label, next_row, 0, 1, cols_per_row)        
 
-        self._is_loading_batch = False
-        
         self._is_loading_batch = False
 
     def open_detail(self, game):
@@ -470,7 +664,7 @@ class LibraryTab(QWidget):
             item = self.grid_layout.itemAt(i)
             if item and item.widget():
                 item.widget().setParent(None)
-        
+
         empty_label = QLabel(message)
         empty_label.setAlignment(Qt.AlignCenter)
         empty_label.setStyleSheet("color: #888; font-size: 14px; padding: 40px;")
