@@ -43,32 +43,29 @@ class RomMClient:
         self.library_cache_path = Path.home() / ".wingosy" / "library_cache.json"
 
     def _load_token(self):
-        """Retrieve token from keyring, with fallback to config."""
+        """Retrieve token via config manager (keyring with encrypted fallback)."""
+        if self.config:
+            return self.config.load_token()
+        
+        # Fallback for when config is not available (rare)
         if keyring:
             try:
-                token = keyring.get_password("wingosy", "auth_token")
-                if token:
-                    return token
+                return keyring.get_password("wingosy", "auth_token")
             except Exception as e:
                 logging.warning(f"Keyring retrieval error: {e}")
-        
-        # Fallback to plaintext config if keyring fails or is empty
-        if self.config:
-            return self.config.get("token")
         return None
 
     def logout(self):
-        """Clear the auth token from memory and system keyring."""
+        """Clear the auth token from memory and secure storage."""
         self.token = None
-        if keyring:
+        if self.config:
+            self.config.delete_token()
+        elif keyring:
             try:
                 keyring.delete_password("wingosy", "auth_token")
                 logging.info("Logged out: removed token from keyring")
             except Exception as e:
                 logging.warning(f"Failed to remove token from keyring: {e}")
-        
-        if self.config:
-            self.config.set("token", None)
 
     def save_library_cache(self, games):
         """Save fetched library to disk for instant startup next time."""
@@ -162,18 +159,14 @@ class RomMClient:
             if r.status_code == 200:
                 self.token = r.json()["access_token"]
                 
-                # Save to keyring with fallback to config
-                saved_to_keyring = False
-                if keyring:
+                # Save via config manager (keyring with encrypted fallback)
+                if self.config:
+                    self.config.save_token(self.token)
+                elif keyring:
                     try:
                         keyring.set_password("wingosy", "auth_token", self.token)
-                        saved_to_keyring = True
                     except Exception as e:
                         logging.warning(f"Failed to save token to keyring: {e}")
-                
-                if not saved_to_keyring and self.config:
-                    # Fallback to config.json
-                    self.config.set("token", self.token)
                 
                 return True, self.token
             return False, r.json().get("detail", "Login failed")
@@ -193,7 +186,7 @@ class RomMClient:
         """
         import concurrent.futures
         url = f"{self.host}/api/roms"
-        limit = 100 # Increased from 50 to halve request count
+        limit = 100 
         all_items = []
         
         # Use a session for connection pooling
@@ -202,7 +195,6 @@ class RomMClient:
         session.mount("http://", adapter)
         session.mount("https://", adapter)
 
-        # 1. Fetch first page to get total count
         def _fetch_page(offset, retry=True):
             params = {"limit": limit, "offset": offset}
             try:
@@ -220,7 +212,7 @@ class RomMClient:
                 if r.status_code == 401:
                     return "REAUTH_REQUIRED"
                 if r.status_code != 200:
-                    return []
+                    return None
                 
                 data = r.json()
                 items = (data.get("items", []) if isinstance(data, dict)
@@ -264,8 +256,9 @@ class RomMClient:
         # Aggregate and cache
         self.user_games = all_items
         self.save_library_cache(all_items)
-        if self.config:
-            self.config.set("cached_library", all_items)
+        
+        # We no longer save cached_library to config.json explicitly here
+        # self.config.set("cached_library", all_items) is removed to avoid UI stutter
         
         print(f"[Library] Parallel fetch complete: {len(all_items)} games.")
         return all_items
@@ -463,11 +456,11 @@ class RomMClient:
             from pathlib import Path
             filename = Path(file_path).name
             
-            # Strip .auto suffix — RomM wants .state not .state.auto
+            # Strip .auto suffix 
             if filename.endswith('.auto'):
                 filename = filename[:-5]
             
-            # Strip RomM timestamp brackets if somehow present
+            # Strip RomM timestamp brackets 
             import re
             filename = re.sub(
                 r'\s*\[[^\]]*\d{4}-\d{2}-\d{2}[^\]]*\]', '', filename)

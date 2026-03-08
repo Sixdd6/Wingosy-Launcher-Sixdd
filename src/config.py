@@ -3,12 +3,41 @@ import os
 import shutil
 import copy
 import logging
+import base64
+import hashlib
+import uuid
 from pathlib import Path
 
 try:
     import keyring
 except ImportError:
     keyring = None
+
+from cryptography.fernet import Fernet
+
+def _get_machine_key() -> bytes:
+    """
+    Derive a stable Fernet key from machine-specific info.
+    Not perfect security but much better than plaintext.
+    """
+    machine_id = str(uuid.getnode()).encode()
+    # Stretch to 32 bytes for Fernet
+    key = hashlib.sha256(machine_id).digest()
+    return base64.urlsafe_b64encode(key)
+
+def _encrypt_token(token: str) -> str:
+    f = Fernet(_get_machine_key())
+    return f.encrypt(token.encode()).decode()
+
+def _decrypt_token(encrypted: str) -> str:
+    f = Fernet(_get_machine_key())
+    return f.decrypt(encrypted.encode()).decode()
+
+EXCLUDED_FROM_CONFIG = {
+    "cached_library",
+    "cached_platforms",
+    "token", # Never save plaintext token
+}
 
 class ConfigManager:
     DEFAULT_CONFIG = {
@@ -137,6 +166,7 @@ class ConfigManager:
     def __init__(self):
         self.config_dir = Path.home() / ".wingosy"
         self.config_file = self.config_dir / "config.json"
+        self._token_memory_only = None
         
         # MIGRATION LOGIC: Be extremely thorough to restore user data
         old_dir = Path.home() / ".argosy"
@@ -166,6 +196,10 @@ class ConfigManager:
         # Load fresh copy of default config
         self.data = copy.deepcopy(self.DEFAULT_CONFIG)
         self.load()
+        
+        # Clean up heavy legacy keys from memory immediately
+        self.data.pop("cached_library", None)
+        self.data.pop("cached_platforms", None)
 
     def load(self):
         if self.config_file.exists():
@@ -182,15 +216,11 @@ class ConfigManager:
                     if self.data.get("host"):
                         self.data["host"] = self.data["host"].rstrip('/')
 
-                    # 3. Migration: if token exists in loaded_data, move to keyring
+                    # 3. Migration: if token exists in loaded_data, move to secure storage
                     if "token" in loaded_data:
                         token = loaded_data["token"]
-                        if token and keyring:
-                            try:
-                                keyring.set_password("wingosy", "auth_token", token)
-                                logging.info("Migrated token to system keyring")
-                            except Exception as e:
-                                logging.warning(f"Keyring migration error: {e}")
+                        if token:
+                            self.save_token(token)
                         
                         # Remove from self.data and save immediately to strip from config.json
                         self.data.pop("token", None)
@@ -212,11 +242,11 @@ class ConfigManager:
     def save(self):
         self.config_dir.mkdir(parents=True, exist_ok=True)
         try:
-            # Create a copy to avoid modifying live data if needed, 
-            # though here we already removed 'token' from self.data
-            save_data = copy.deepcopy(self.data)
-            # Ensure token is NEVER saved to config.json
-            save_data.pop("token", None)
+            # Build filtered dict excluding heavy or sensitive keys
+            save_data = {
+                k: v for k, v in self.data.items()
+                if k not in EXCLUDED_FROM_CONFIG
+            }
             
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(save_data, f, indent=4)
@@ -231,16 +261,68 @@ class ConfigManager:
             self.data.pop(key, None)
         else:
             if key == "token":
-                # Special handling for token: save to keyring, not config.json
-                if value and keyring:
-                    try:
-                        keyring.set_password("wingosy", "auth_token", value)
-                        return
-                    except Exception as e:
-                        logging.warning(f"Failed to save token to keyring: {e}")
-                # Fallback to self.data if keyring fails (will be saved to json if not careful)
-                # But wait, our save() method pops 'token', so it won't be saved to json anyway.
-                # However, if keyring fails, we might still want it in memory.
+                self.save_token(value)
+                return
             
             self.data[key] = value
+        self.save()
+
+    def save_token(self, token: str):
+        # 1. Try keyring first (best)
+        try:
+            if keyring:
+                keyring.set_password("wingosy", "auth_token", token)
+                # Mark that keyring worked
+                self.data.pop("encrypted_token", None)
+                self.data.pop("keyring_failed", None)
+                self.save()
+                return
+        except Exception as e:
+            logging.warning(f"keyring unavailable: {e}")
+
+        # 2. Fallback: encrypted token in config.json
+        try:
+            self.data["encrypted_token"] = _encrypt_token(token)
+            self.data["keyring_failed"] = True
+            self.save()
+            logging.warning("Token stored encrypted in config.json (keyring unavailable)")
+        except Exception as e:
+            logging.error(f"Could not persist token: {e}")
+            # 3. Last resort: memory only
+            self._token_memory_only = token
+            self.data["keyring_failed"] = True
+
+    def load_token(self) -> str | None:
+        # 1. Try keyring
+        try:
+            if keyring:
+                token = keyring.get_password("wingosy", "auth_token")
+                if token:
+                    return token
+        except Exception:
+            pass
+
+        # 2. Try encrypted fallback in config.json
+        encrypted = self.data.get("encrypted_token")
+        if encrypted:
+            try:
+                return _decrypt_token(encrypted)
+            except Exception as e:
+                logging.error(f"Could not decrypt token: {e}")
+
+        # 3. Memory only or legacy plaintext
+        return self._token_memory_only or self.data.get("token")
+
+    def delete_token(self):
+        # Clear keyring
+        try:
+            if keyring:
+                keyring.delete_password("wingosy", "auth_token")
+        except Exception:
+            pass
+        # Clear encrypted fallback
+        self.data.pop("encrypted_token", None)
+        self.data.pop("keyring_failed", None)
+        # Clear memory
+        self._token_memory_only = None
         self.save()

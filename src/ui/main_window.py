@@ -90,6 +90,16 @@ class WingosyMainWindow(QMainWindow):
         self.setup_tray()
         self.ensure_watcher_running()
         
+        if self.config.data.get("keyring_failed"):
+            QMessageBox.warning(
+                self,
+                "Credential Storage Warning",
+                "Your system's secure credential manager is unavailable.\n\n"
+                "Wingosy has stored your login token using local encryption instead.\n\n"
+                "This is less secure than keyring. Consider enabling your OS keyring."
+            )
+            self.config.data.pop("keyring_failed", None)
+
         if self.config.get("first_run", True):
             WelcomeDialog(self).exec()
             self.config.set("first_run", False)
@@ -164,7 +174,7 @@ class WingosyMainWindow(QMainWindow):
         
         if not force_refresh:
             # Step A — Load from cache immediately
-            cached = self.config.get("cached_library", [])
+            cached, _ = self.client.load_library_cache()
             if cached:
                 self.all_games = cached
                 # Ensure platform filter is updated for cached games (saves/restores current)
@@ -183,7 +193,7 @@ class WingosyMainWindow(QMainWindow):
         self.library_tab.set_status("Connecting to RomM server...")
 
         # Step C — Start worker
-        cached_non_empty = len(self.config.get("cached_library", [])) > 0
+        cached_non_empty = len(self.all_games) > 0
         self._fetch_thread = LibraryFetchWorker(self.client, cached_non_empty=cached_non_empty)
         self._fetch_thread.finished.connect(self._on_library_fetched)
         self._fetch_thread.error.connect(lambda: self.library_tab.set_status("Could not connect to RomM server. Check your settings.", color="#b71c1c"))
