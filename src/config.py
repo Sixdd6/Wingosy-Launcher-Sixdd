@@ -66,7 +66,7 @@ class ConfigManager:
         "emulators": {
             "Switch (Yuzu)": {
                 "exe": "yuzu.exe", 
-                "type": "folder", 
+                "type": "switch", 
                 "title_id_regex": r"01[0-9a-f]{14}",
                 "path": "",
                 "config_path": str(Path(os.path.expandvars(r'%APPDATA%\yuzu\config'))),
@@ -78,7 +78,7 @@ class ConfigManager:
             },
             "Switch (Eden)": {
                 "exe": "eden.exe",
-                "type": "folder",
+                "type": "switch",
                 "path": "",
                 "config_path": str(Path(os.path.expandvars(r'%APPDATA%\eden\config'))),
                 "url": "https://github.com/eden-emulator/Releases/releases/download/v0.2.0-rc1/Eden-Windows-v0.2.0-rc1-amd64-msvc-standard.zip",
@@ -89,7 +89,7 @@ class ConfigManager:
             },
             "PlayStation 3": {
                 "exe": "rpcs3.exe", 
-                "type": "folder", 
+                "type": "ps3", 
                 "path": "",
                 "config_path": "",
                 "github": "RPCS3/rpcs3-binaries-win",
@@ -114,7 +114,7 @@ class ConfigManager:
             },
             "GameCube / Wii": {
                 "exe": "Dolphin.exe", 
-                "type": "file", 
+                "type": "dolphin", 
                 "ext": "sav",
                 "path": "",
                 "config_path": str(Path.home() / "Documents" / "Dolphin Emulator" / "Config"),
@@ -140,7 +140,7 @@ class ConfigManager:
             },
             "Wii U (Cemu)": {
                 "exe": "Cemu.exe",
-                "type": "folder",
+                "type": "cemu",
                 "path": "",
                 "config_path": str(Path(os.path.expandvars(r'%APPDATA%\Cemu'))),
                 "url": "https://github.com/cemu-project/Cemu/releases/download/v2.0-60/cemu-2.0-60-windows-x64.zip",

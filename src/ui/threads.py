@@ -23,6 +23,42 @@ except ImportError:
 from src import pcgamingwiki
 from src.utils import extract_strip_root
 
+class LocalDiscoveryWorker(QThread):
+    """
+    Background worker to robustly find ROMs on disk without freezing the UI.
+    Emits rom_discovered(game_id, local_path) for each found ROM.
+    """
+    rom_discovered = Signal(int, str)
+    finished_discovery = Signal()
+
+    def __init__(self, games: list, config_data: dict):
+        super().__init__()
+        self.games = games
+        self.config_data = config_data
+        self._is_running = True
+
+    def stop(self):
+        self._is_running = False
+
+    def run(self):
+        from src.utils import resolve_local_rom_path
+        for game in self.games:
+            if not self._is_running:
+                break
+            
+            # Skip if already marked as exists (e.g. from a previous partial scan)
+            if game.get('_local_exists'):
+                continue
+
+            try:
+                path = resolve_local_rom_path(game, self.config_data)
+                if path and path.exists():
+                    self.rom_discovered.emit(game['id'], str(path))
+            except Exception as e:
+                logging.debug(f"[Discovery] Error resolving {game.get('name')}: {e}")
+        
+        self.finished_discovery.emit()
+
 class WikiFetcherThread(QThread):
     finished = Signal(list)
     def __init__(self, game_title, windows_games_dir=""):

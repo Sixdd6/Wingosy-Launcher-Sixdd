@@ -260,3 +260,7 @@ class DummyRomMClient:
     def download_firmware(self, fw_item, target_path,
                           progress_cb=None, thread=None):
         return False
+
+    def update_playtime(self, rom_id, seconds):
+        print(f"[DummyClient] Updated playtime for rom_id={rom_id}: {seconds}s")
+        return True

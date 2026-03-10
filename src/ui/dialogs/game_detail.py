@@ -13,7 +13,7 @@ from src.ui.widgets import format_size, get_resource_path, format_speed
 from src.platforms import RETROARCH_CORES
 from src import emulators, windows_saves, download_registry
 from src.save_strategies import get_strategy
-from src.utils import read_retroarch_cfg, write_retroarch_cfg_values, extract_strip_root
+from src.utils import read_retroarch_cfg, write_retroarch_cfg_values, extract_strip_root, resolve_local_rom_path
 
 _retroarch_autosave_checked = False
 _ppsspp_assets_checked = False
@@ -454,28 +454,16 @@ class GameDetailPanel(QWidget):
         self._update_button_states()
 
     def _get_local_rom_path(self):
-        if self._is_windows:
-            wd = self.config.get("windows_games_dir")
-            fn = self.game.get('fs_name')
-            return Path(wd) / Path(fn).stem if wd and fn else None
-        
-        br = self.config.get("base_rom_path")
-        fn = self.game.get('fs_name')
-        return Path(br) / self.game.get('platform_slug') / fn if br and fn else None
+        return resolve_local_rom_path(self.game, self.config.data)
         
     def _update_button_states(self):
-        if self._is_windows and self._local_rom_path and self._local_rom_path.is_dir():
-            exists = any(self._local_rom_path.rglob("*.exe"))
+        self._local_rom_path = self._get_local_rom_path()
+        p = self._local_rom_path
+        
+        if self._is_windows and p and p.is_dir():
+            exists = any(p.rglob("*.exe"))
         else:
-            exists = self._local_rom_path and self._local_rom_path.exists()
-            
-        if not exists and not self._is_windows:
-            br = self.config.get("base_rom_path")
-            fn = self.game.get('fs_name')
-            rp = Path(br) / fn if br and fn else None
-            if rp and rp.exists():
-                self._local_rom_path = rp
-                exists = True
+            exists = p and p.exists()
                 
         self.play_btn.setVisible(exists)
         self.gs_btn.setVisible(exists and self._is_windows)
@@ -706,9 +694,9 @@ class GameDetailPanel(QWidget):
         return True
 
     def play_game(self):
-        local_rom = self._local_rom_path
+        local_rom = self._get_local_rom_path()
         if not local_rom or not local_rom.exists():
-            QMessageBox.warning(self, "Error — Wingosy", "Download the game first.")
+            QMessageBox.warning(self, "Error — Wingosy", "Could not find the local ROM file. Please download it first.")
             return
             
         emu_data = None

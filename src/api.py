@@ -423,34 +423,45 @@ class RomMClient:
             print(f"[API] download_state error: {e}")
             return False
 
-    def upload_save(self, rom_id, emulator, file_path, slot="wingosy-windows", raw=False):
+    def upload_save(self, rom_id, emulator, file_obj, slot="wingosy-windows", raw=False):
         try:
             url = f"{self.host}/api/saves"
             params = {"rom_id": rom_id, "emulator": emulator, "slot": slot}
-            filename = os.path.basename(file_path)
             
-            with open(file_path, 'rb') as f:
+            # file_obj can be a path string or a file-like object
+            if isinstance(file_obj, str):
+                f = open(file_obj, 'rb')
+                close_after = True
+                filename = os.path.basename(file_obj)
+            else:
+                f = file_obj
+                close_after = False
+                filename = "save.zip"
+            
+            try:
                 files = {'saveFile': (filename, f, 'application/octet-stream')}
-                try:
-                    r = requests.post(url, params=params, headers=self.get_auth_headers(), 
-                                      files=files, timeout=60, verify=CERTIFI_PATH)
-                except (requests.exceptions.ConnectTimeout,
-                        requests.exceptions.ConnectionError,
-                        requests.exceptions.Timeout,
-                        requests.exceptions.RequestException) as e:
-                    print(f"[API] Network error in upload_save: {e}")
-                    return False, str(e)
+                r = requests.post(url, params=params, headers=self.get_auth_headers(),
+                                  files=files, timeout=(10, 120), verify=CERTIFI_PATH)
                 print(f"[API] upload_save -> {r.status_code}: {r.text[:200]}")
                 return r.status_code in [200, 201], r.text
+            finally:
+                if close_after: f.close()
         except Exception as e:
             print(f"[API] upload_save error: {e}")
             return False, str(e)
 
-    def upload_state(self, rom_id, emulator, file_path,
-                     slot="wingosy-state"):
+    def upload_state(self, rom_id, emulator, file_obj, slot="wingosy-state"):
         try:
             from pathlib import Path
-            filename = Path(file_path).name
+            
+            if isinstance(file_obj, str):
+                f = open(file_obj, 'rb')
+                close_after = True
+                filename = Path(file_obj).name
+            else:
+                f = file_obj
+                close_after = False
+                filename = "state.state"
             
             # Strip .auto suffix 
             if filename.endswith('.auto'):
@@ -467,20 +478,14 @@ class RomMClient:
                 "emulator": emulator,
             }
             
-            with open(file_path, 'rb') as f:
-                files = {'stateFile': (filename, f,
-                                       'application/octet-stream')}
-                r = requests.post(
-                    url,
-                    params=params,
-                    headers=self.get_auth_headers(),
-                    files=files,
-                    timeout=60,
-                    verify=CERTIFI_PATH
-                )
-                print(f"[API] upload_state -> {r.status_code}: "
-                      f"{r.text[:300]}")
+            try:
+                files = {'stateFile': (filename, f, 'application/octet-stream')}
+                r = requests.post(url, params=params, headers=self.get_auth_headers(),
+                                  files=files, timeout=(10, 120), verify=CERTIFI_PATH)
+                print(f"[API] upload_state -> {r.status_code}: {r.text[:300]}")
                 return r.status_code in [200, 201], r.text
+            finally:
+                if close_after: f.close()
         except Exception as e:
             print(f"[API] upload_state error: {e}")
             return False, str(e)

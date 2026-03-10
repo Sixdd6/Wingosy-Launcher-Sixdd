@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,   
                              QPushButton, QLineEdit, QScrollArea, QGridLayout,
-                             QComboBox, QSizePolicy, QAbstractItemView, QGraphicsDropShadowEffect)
+                             QComboBox, QSizePolicy, QAbstractItemView, QGraphicsDropShadowEffect, QStackedWidget)
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPixmap, QImage, QColor
 
@@ -163,6 +163,27 @@ class GameCard(QWidget):
         self.fetcher = None
         self._full_pixmap = None
 
+    def set_local_exists(self, exists):
+        """Dynamically add or remove the local ROM checkmark."""
+        self.game['_local_exists'] = exists
+        if exists:
+            if not hasattr(self, 'local_indicator'):
+                self.local_indicator = QLabel("✓", self)
+                self.local_indicator.setStyleSheet("""
+                    color: white;
+                    background-color: #4caf50;
+                    border-radius: 7px;
+                    font-size: 9px;
+                    font-weight: bold;
+                    padding: 1px 3px;
+                """)
+                self.local_indicator.setFixedSize(14, 14)
+                self.local_indicator.setAlignment(Qt.AlignCenter)
+                self.local_indicator.move(4, 4)
+            self.local_indicator.show()
+        elif hasattr(self, 'local_indicator'):
+            self.local_indicator.hide()
+
     def set_selected(self, selected):
         self._selected = selected
         if selected:
@@ -234,11 +255,14 @@ class LibraryTab(QWidget):
         self._scroll_debounce.setInterval(150)  # ms cooldown
         self._scroll_debounce.timeout.connect(self._do_load_batch)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
 
-        # Filter controls
-        filter_layout = QHBoxLayout()
+        # Filter controls (Header)
+        self.filter_widget = QWidget()
+        filter_layout = QHBoxLayout(self.filter_widget)
+        filter_layout.setContentsMargins(10, 10, 10, 10)
         filter_layout.addWidget(QLabel("Search:"))
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Filter games (Ctrl+F)...")    
@@ -261,9 +285,17 @@ class LibraryTab(QWidget):
         self.retry_btn.clicked.connect(lambda: self.main_window.fetch_library_and_populate(force_refresh=True))
         filter_layout.addWidget(self.retry_btn)
 
-        layout.addLayout(filter_layout)
+        self.main_layout.addWidget(self.filter_widget)
 
-        # Grid area
+        # Stack area
+        self.stack = QStackedWidget()
+        
+        # Page 0: Grid
+        self.grid_page = QWidget()
+        grid_page_layout = QVBoxLayout(self.grid_page)
+        grid_page_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Grid area inside scroll
         self.grid_widget = QWidget()
         self.grid_layout = QGridLayout(self.grid_widget)
         self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
@@ -271,7 +303,6 @@ class LibraryTab(QWidget):
         self.scroll_area = SmoothScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setWidget(self.grid_widget)
-        # Connect scroll event to lazy loader
         self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll)
         self.scroll_area.viewport().installEventFilter(self)
 
@@ -280,14 +311,21 @@ class LibraryTab(QWidget):
         self._resize_debounce.setInterval(80)
         self._resize_debounce.timeout.connect(self._resize_all_cards)       
 
-        layout.addWidget(self.scroll_area)
+        grid_page_layout.addWidget(self.scroll_area)
 
-        # Status label at the very bottom
+        # Status label
         self.status_label = QLabel()
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setStyleSheet("color: #bbb; padding: 5px; background: #222; border-top: 1px solid #333;")
         self.status_label.setVisible(False)
-        layout.addWidget(self.status_label)
+        grid_page_layout.addWidget(self.status_label)
+        
+        self.stack.addWidget(self.grid_page)
+        
+        # Page 1: Detail Panel (placeholder)
+        self.detail_panel = None
+        
+        self.main_layout.addWidget(self.stack, 1)
         
         # Gamepad support via XInput polling
         self._last_buttons = 0
@@ -406,7 +444,10 @@ class LibraryTab(QWidget):
             self.open_detail(visible_cards[idx].game)
             return True
         elif key == Qt.Key_Escape:
-            self._select_card(-1, visible_cards)
+            if self.stack.currentWidget() == self.detail_panel:
+                self._close_detail()
+            else:
+                self._select_card(-1, visible_cards)
             return True
         else:
             return False
@@ -591,6 +632,14 @@ class LibraryTab(QWidget):
 
         print(f"[Library] Filter → {len(filtered)} games (platform='{platform}' search='{text}')")
 
+    def update_game_local_status(self, game_id, exists):
+        """Dynamically updates a GameCard's checkmark status."""
+        for i in range(self.grid_layout.count()):
+            widget = self.grid_layout.itemAt(i).widget()
+            if isinstance(widget, GameCard) and widget.game['id'] == game_id:
+                widget.set_local_exists(exists)
+                break
+
     def populate_games(self, games, status=None):
         """Standard method to populate the grid from a list of games."""
         self.populate_grid(games)
@@ -719,9 +768,31 @@ class LibraryTab(QWidget):
         self._is_loading_batch = False
 
     def open_detail(self, game):
-        # Local import to avoid circular dependency with dialogs.py
-        from src.ui.dialogs import GameDetailDialog
-        GameDetailDialog(game, self.client, self.config, self.main_window, self.main_window).exec()
+        # Local import to avoid circular dependency
+        from src.ui.dialogs.game_detail import GameDetailPanel
+        
+        # Remove old detail page if exists
+        if self.detail_panel:
+            self.stack.removeWidget(self.detail_panel)
+            self.detail_panel.deleteLater()
+        
+        self.detail_panel = GameDetailPanel(
+            game, self.client, self.config,
+            self.main_window,
+            on_close=self._close_detail,
+            parent=self
+        )
+        self.stack.addWidget(self.detail_panel)
+        self.stack.setCurrentWidget(self.detail_panel)
+        self.filter_widget.hide() # Hide filters while in detail view
+
+    def _close_detail(self):
+        self.stack.setCurrentWidget(self.grid_page)
+        self.filter_widget.show()
+        if self.detail_panel:
+            self.stack.removeWidget(self.detail_panel)
+            self.detail_panel.deleteLater()
+            self.detail_panel = None
 
     def show_empty_message(self, message):
         for i in reversed(range(self.grid_layout.count())):

@@ -14,13 +14,14 @@ from PySide6.QtGui import QIcon, QPixmap, QKeySequence, QShortcut
 from PySide6.QtCore import Qt, QSettings, Slot, Signal, QThread, QTimer, QEvent, QPoint
 
 from src.ui.threads import (ImageFetcher, BiosDownloader, DolphinDownloader, 
-                            DirectDownloader, GithubDownloader, ConflictResolveThread)
+                            DirectDownloader, GithubDownloader, ConflictResolveThread,
+                            LocalDiscoveryWorker)
 from src.ui.widgets import get_resource_path, DownloadQueueWidget, format_speed
 from src.ui.dialogs import SetupDialog, WelcomeDialog, ConflictDialog
 from src.ui.tabs.library import LibraryTab
 from src.ui.tabs.emulators import EmulatorsTab
 from src.ui.tabs.settings import SettingsTab
-from src.utils import zip_path
+from src.utils import zip_path, resolve_local_rom_path
 from src.platforms import RETROARCH_PLATFORMS, platform_matches
 from src import emulators
 
@@ -37,18 +38,7 @@ class LibraryFetchWorker(QThread):
 
     def run(self):
         def _on_page(batch, total):
-            # Pre-calculate local ROM existence for this batch
-            base_rom = self.client.config.get("base_rom_path")
-            if base_rom:
-                base_path = Path(base_rom)
-                for g in batch:
-                    rom_name = g.get('fs_name')
-                    platform = g.get('platform_slug')
-                    exists = False
-                    if rom_name:
-                        if (base_path / platform / rom_name).exists() or (base_path / rom_name).exists():
-                            exists = True
-                    g['_local_exists'] = exists
+            # Just emit the batch, discovery happens in background later
             self.batch_ready.emit(batch, total)
 
         try:
@@ -238,8 +228,31 @@ class WingosyMainWindow(QMainWindow):
                 status=f"📚 Loaded from cache ({len(games)} games)"
             )
             logging.info(f"[Library] Cache loaded: {len(games)} games")
+            
+            # Start background discovery
+            self._start_local_discovery(games)
         except Exception as e:
             logging.warning(f"[Library] Cache load failed: {e}")
+
+    def _start_local_discovery(self, games):
+        if hasattr(self, '_discovery_worker') and self._discovery_worker.isRunning():
+            self._discovery_worker.stop()
+            self._discovery_worker.wait()
+        
+        self._discovery_worker = LocalDiscoveryWorker(games, self.config.data)
+        self._discovery_worker.rom_discovered.connect(self._on_rom_discovered)
+        self._discovery_worker.start()
+
+    @Slot(int, str)
+    def _on_rom_discovered(self, game_id, local_path):
+        # Update flag in main list
+        for g in self.all_games:
+            if g.get('id') == game_id:
+                g['_local_exists'] = True
+                break
+        
+        # Update UI if library tab is showing this game
+        self.library_tab.update_game_local_status(game_id, True)
 
     def _on_image_fetched(self, fetcher, generation=None):
         if generation is not None and generation != self.fetch_generation:
@@ -268,6 +281,7 @@ class WingosyMainWindow(QMainWindow):
             # Step A — Load from cache immediately
             cached, _ = self.client.load_library_cache()
             if cached:
+                cached = [g for g in cached if isinstance(g, dict)]
                 self.all_games = cached
                 # Ensure platform filter is updated for cached games (saves/restores current)
                 self._update_platform_filter(cached)
@@ -731,18 +745,59 @@ class WingosyMainWindow(QMainWindow):
         import sys
         if sys.platform != "win32":
             return super().nativeEvent(eventType, message)
-        
+
         import ctypes
         import ctypes.wintypes as wintypes
-        
+
         if eventType != b"windows_generic_MSG":
             return super().nativeEvent(eventType, message)
-        
+
         msg = ctypes.wintypes.MSG.from_address(int(message))
-        
-        WM_NCCALCSIZE = 0x0083
-        WM_NCHITTEST  = 0x0084
-        
+
+        WM_NCCALCSIZE    = 0x0083
+        WM_NCHITTEST     = 0x0084
+        WM_GETMINMAXINFO = 0x0024
+
+        if msg.message == WM_GETMINMAXINFO:
+            # Constrain the maximized window to the work area so it never covers the taskbar
+            try:
+                hwnd = int(self.winId())
+                MONITOR_DEFAULTTONEAREST = 2
+                monitor = ctypes.windll.user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+
+                class _RECT(ctypes.Structure):
+                    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                                 ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+                class _MONITORINFO(ctypes.Structure):
+                    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", _RECT),
+                                 ("rcWork", _RECT), ("dwFlags", ctypes.c_ulong)]
+
+                mi = _MONITORINFO()
+                mi.cbSize = ctypes.sizeof(mi)
+                ctypes.windll.user32.GetMonitorInfoW(monitor, ctypes.byref(mi))
+
+                class _POINT(ctypes.Structure):
+                    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+                class _MINMAXINFO(ctypes.Structure):
+                    _fields_ = [("ptReserved", _POINT), ("ptMaxSize", _POINT),
+                                 ("ptMaxPosition", _POINT), ("ptMinTrackSize", _POINT),
+                                 ("ptMaxTrackSize", _POINT)]
+
+                mmi = _MINMAXINFO.from_address(msg.lParam)
+                w = mi.rcWork.right - mi.rcWork.left
+                h = mi.rcWork.bottom - mi.rcWork.top
+                mmi.ptMaxSize.x = w
+                mmi.ptMaxSize.y = h
+                mmi.ptMaxPosition.x = mi.rcWork.left
+                mmi.ptMaxPosition.y = mi.rcWork.top
+                mmi.ptMaxTrackSize.x = w
+                mmi.ptMaxTrackSize.y = h
+                return True, 0
+            except Exception:
+                pass
+
         if msg.message == WM_NCCALCSIZE:
             if msg.wParam == 1:
                 return True, 0
@@ -756,12 +811,12 @@ class WingosyMainWindow(QMainWindow):
             rect = wintypes.RECT()
             ctypes.windll.user32.GetWindowRect(int(self.winId()), ctypes.byref(rect))
             
-            # Use device pixels for border
+            # Use device pixels for border — fall back to Qt's ratio if Win API unavailable
             try:
                 dpi = ctypes.windll.user32.GetDpiForWindow(int(self.winId()))
                 scale = dpi / 96.0
             except Exception:
-                scale = 1.0
+                scale = self.devicePixelRatioF()
             
             b = max(4, int(8 * scale))
             

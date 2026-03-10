@@ -275,6 +275,7 @@ class TestSavePathResolution:
         self.watcher = WingosyWatcher.__new__(WingosyWatcher)
         self.watcher.client = client
         self.watcher.config = self.config
+        self.watcher._sync_threads = []
         import signal
         from pathlib import Path
         from PySide6.QtCore import Signal
@@ -532,6 +533,7 @@ class TestWatcherResilience:
         self.watcher.session_errors = {}
         self.watcher.active_sessions = {}
         self.watcher.running = True
+        self.watcher._sync_threads = []
         # Stub log_signal
         self.watcher.log_signal = MagicMock()
 
@@ -604,10 +606,13 @@ class TestWatcherResilience:
         self.watcher.tmp_dir.mkdir()
         
         # Mock successful upload
-        self.client.upload_save = MagicMock(return_value=True)
+        self.client.upload_save = MagicMock(return_value=(True, "ok"))
         self.watcher.save_cache = MagicMock()
         
         self.watcher.handle_exit(data)
+        
+        # Manually trigger the success callback because signals need an event loop
+        self.watcher._on_sync_thread_done("1", 12345, True)
         
         assert self.watcher.session_errors["1"] == 0
 

@@ -2,6 +2,64 @@ import hashlib
 import os
 import zipfile
 from pathlib import Path
+from typing import Optional
+
+def resolve_local_rom_path(game: dict, config_data: dict) -> Optional[Path]:
+    """
+    Robustly find a ROM on disk using multiple strategies:
+    1. Check base_rom_path / platform / filename
+    2. Check base_rom_path / filename
+    3. Recursive search in base_rom_path (last resort)
+    4. Windows-specific: base_games_dir / folder_name (from filename stem)
+    """
+    from pathlib import Path
+    import os
+    
+    platform = game.get('platform_slug')
+    rom_name = game.get('fs_name')
+    if not rom_name:
+        return None
+        
+    # Windows Native Logic
+    is_windows = platform in ["windows", "win", "pc", "pc-windows", "windows-games", "win95", "win98"]
+    if is_windows:
+        wd = config_data.get("windows_games_dir")
+        if wd:
+            # Check for folder named after ROM stem (standard Wingosy Windows install)
+            folder = Path(wd) / Path(rom_name).stem
+            if folder.exists() and folder.is_dir():
+                return folder
+            # Check direct file if not a folder-based install
+            direct = Path(wd) / rom_name
+            if direct.exists():
+                return direct
+
+    # Standard Emulator ROM Logic
+    base_rom = config_data.get("base_rom_path")
+    if not base_rom:
+        return None
+    
+    base_path = Path(base_rom)
+    
+    # 1. Base / Platform / Filename
+    if platform:
+        p1 = base_path / platform / rom_name
+        if p1.exists():
+            return p1
+            
+    # 2. Base / Filename
+    p2 = base_path / rom_name
+    if p2.exists():
+        return p2
+        
+    # 3. Recursive Search (v0.5.7 legacy fallback)
+    # Only do this if base_rom is a valid directory to avoid hangs
+    if base_path.is_dir():
+        for root, dirs, files in os.walk(base_rom):
+            if rom_name in files:
+                return Path(root) / rom_name
+                
+    return None
 
 def calculate_file_hash(file_path):
     if not os.path.exists(file_path):

@@ -33,7 +33,14 @@ class SaveStrategy(ABC):
     def __init__(self, config: dict, emulator: dict):
         self.config   = config
         self.emulator = emulator
+        self.session_start_time = 0.0
+        self.rom_path = ""
     
+    def set_session_context(self, start_time: float, rom_path: str):
+        """Used by complex strategies to filter files by mtime or extract Title IDs."""
+        self.session_start_time = start_time
+        self.rom_path = rom_path
+
     @abstractmethod
     def get_save_files(self, rom: dict) -> list[Path]:
         """
@@ -122,40 +129,112 @@ class SaveStrategy(ABC):
 
 class RetroArchStrategy(SaveStrategy):
     """
-    Handles RetroArch .srm save files.
+    Handles RetroArch .srm and .state.auto save files.
+    Uses direct path construction from the exe location first (fast, reliable),
+    then falls back to retroarch.cfg-based resolution.
     """
     mode_id = "retroarch"
-    
+
+    def _get_ra_paths(self, rom: dict):
+        """
+        Return (srm_path, state_path, save_folder_dir) using the same direct-
+        construction logic as the working 0.5.x branch.
+        Returns (None, None, None) if the exe is unknown.
+        """
+        from src.platforms import RETROARCH_CORES, RETROARCH_CORE_SAVE_FOLDERS
+        exe = self.emulator.get("executable_path", "")
+        if not exe or not Path(exe).exists():
+            return None, None, None
+
+        ra_dir = Path(exe).parent
+        platform_slug = rom.get("platform_slug", "")
+        rom_stem = self._get_rom_stem(rom)
+        if not rom_stem:
+            return None, None, None
+
+        # PSP: folder-based SAVEDATA
+        if platform_slug in ("psp", "playstation-portable"):
+            psp_saves = ra_dir / "saves" / "PPSSPP" / "PSP" / "SAVEDATA"
+            state = ra_dir / "states" / "PPSSPP" / f"{rom_stem}.state.auto"
+            return None, state, psp_saves  # treat srm=None, state=auto, save_dir=psp_saves folder
+
+        core_dll = RETROARCH_CORES.get(platform_slug, "")
+        if not core_dll:
+            return None, None, None
+
+        core_name = (core_dll.replace(".dll", "").replace(".so", "")
+                              .replace("_libretro", ""))
+        save_folder = RETROARCH_CORE_SAVE_FOLDERS.get(core_name, core_name)
+
+        srm   = ra_dir / "saves"  / save_folder / f"{rom_stem}.srm"
+        state = ra_dir / "states" / save_folder / f"{rom_stem}.state.auto"
+        save_dir = ra_dir / "saves" / save_folder
+        return srm, state, save_dir
+
     def get_save_files(self, rom: dict) -> list[Path]:
-        save_dir = self._get_retroarch_save_dir()
         rom_stem = self._get_rom_stem(rom)
-        
         if not rom_stem:
-            logging.warning(f"[RetroArchStrategy] No ROM stem found. Keys: {list(rom.keys())}")
+            logging.warning(f"[RetroArchStrategy] No ROM stem for {rom.get('name')}")
             return []
+
+        # Fast path — direct construction (no rglob)
+        srm, state, save_dir = self._get_ra_paths(rom)
         
+        # SPECIAL CASE: PSP (Folder-based)
+        platform_slug = rom.get("platform_slug", "")
+        if platform_slug in ("psp", "playstation-portable"):
+            if save_dir and save_dir.is_dir():
+                if self.session_start_time > 0:
+                    # We are in handle_exit/mid-session sync. 
+                    # Scan for the specific GameID folder that was modified during play.
+                    changed_dirs = []
+                    for d in save_dir.iterdir():
+                        if d.is_dir():
+                            try:
+                                if d.stat().st_mtime > self.session_start_time:
+                                    changed_dirs.append(d)
+                            except: pass
+                    if changed_dirs:
+                        # If multiple changed (unlikely), use the most recently modified one
+                        changed_dirs.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                        return [changed_dirs[0]]
+                
+                # At start of session or if no change detected yet, return the whole SAVEDATA 
+                # so watcher captures the state of the entire folder for comparison.
+                return [save_dir]
+
+        if srm is not None or save_dir is not None:
+            candidates = []
+            if srm is None and save_dir and save_dir.is_dir():
+                # Generic folder-based fallback (other cores)
+                candidates.append(save_dir)
+            else:
+                if srm and srm.exists():
+                    candidates.append(srm)
+                if state and state.exists():
+                    candidates.append(state)
+            if candidates:
+                return candidates
+
+        # Slow fallback — config-based rglob
+        fallback_dir = self._get_retroarch_save_dir()
+        if not fallback_dir or not fallback_dir.exists():
+            return []
         candidates = []
-        if save_dir and save_dir.exists():
-            # Check for subfolders or direct files
-            for p in save_dir.rglob(f"{rom_stem}.srm"): candidates.append(p)
-            for p in save_dir.rglob(f"{rom_stem}.sav"): candidates.append(p)
-            for p in save_dir.rglob(f"{rom_stem}.state*"): candidates.append(p)
-            
+        for p in fallback_dir.rglob(f"{rom_stem}.srm"):   candidates.append(p)
+        for p in fallback_dir.rglob(f"{rom_stem}.sav"):   candidates.append(p)
+        for p in fallback_dir.rglob(f"{rom_stem}.state.auto"): candidates.append(p)
         return candidates
-    
+
     def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
-        save_dir = self._get_retroarch_save_dir()
+        srm, state, save_dir = self._get_ra_paths(rom)
+        dest_dir = save_dir or self._get_retroarch_save_dir()
         rom_stem = self._get_rom_stem(rom)
-        
-        if not rom_stem:
+
+        if not dest_dir or not rom_stem:
             return False
-        
-        dest_dir = save_dir
-        if not dest_dir:
-            return False
-        
+
         dest_dir.mkdir(parents=True, exist_ok=True)
-        
         dest_name = filename if filename.endswith((".srm", ".sav")) else f"{rom_stem}.srm"
         if ".state" in filename:
             dest_name = filename
@@ -168,23 +247,298 @@ class RetroArchStrategy(SaveStrategy):
         except Exception as e:
             logging.error(f"[RetroArchStrategy] Write failed: {e}")
             return False
-    
+
     def get_save_dir(self, rom: dict) -> Optional[Path]:
-        return self._get_retroarch_save_dir()
+        _, _, save_dir = self._get_ra_paths(rom)
+        return save_dir or self._get_retroarch_save_dir()
+
+
+class SwitchStrategy(SaveStrategy):
+    """
+    Handles Switch (Yuzu/Eden) Title ID based path discovery.
+    Ports SQLite database lookup and XCI header parsing from legacy branch.
+    """
+    mode_id = "switch"
+
+    def _resolve_title_id(self, rom: dict) -> Optional[str]:
+        import re
+        import sqlite3
+        
+        emu_dir = Path(self.emulator.get("executable_path", "")).parent
+        search_roots = [
+            emu_dir / "user",
+            Path(os.path.expandvars(r'%APPDATA%\eden')),
+            Path(os.path.expandvars(r'%APPDATA%\yuzu')),
+        ]
+        
+        # 1. Try SQLite game_list.db lookup
+        title = rom.get("name", "")
+        for root in search_roots:
+            db_path = root / "cache/game_list/game_list.db"
+            if db_path.exists():
+                try:
+                    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                    cursor = conn.cursor()
+                    # Try to find a table with title_id and name
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                    for (table,) in cursor.fetchall():
+                        cursor.execute(f"PRAGMA table_info({table})")
+                        cols = [c[1].lower() for c in cursor.fetchall()]
+                        id_col = next((c for c in cols if c in ('title_id', 'program_id', 'id')), None)
+                        name_col = next((c for c in cols if 'name' in c or 'title' in c), None)
+                        if id_col and name_col:
+                            cursor.execute(f"SELECT {id_col} FROM {table} WHERE {name_col} LIKE ? LIMIT 1", (f"%{title}%",))
+                            row = cursor.fetchone()
+                            if row:
+                                tid = hex(row[0])[2:].upper().zfill(16) if isinstance(row[0], int) else str(row[0]).upper().replace('0X', '')
+                                if re.match(r'^[0-9A-F]{16}$', tid):
+                                    conn.close()
+                                    return tid
+                    conn.close()
+                except Exception: pass
+
+        # 2. Try XCI Header parsing (offset 0x108)
+        rom_p = Path(self.rom_path)
+        if rom_p.exists() and rom_p.suffix.lower() == ".xci":
+            try:
+                with open(rom_p, "rb") as f:
+                    f.seek(0x108)
+                    tid = f.read(8)[::-1].hex().upper()
+                    if re.match(r'^01[0-9A-F]{14}$', tid):
+                        return tid
+            except Exception: pass
+
+        # 3. Last resort: most recently modified 16-char folder
+        recent_tid, max_mtime = None, 0
+        for root in search_roots:
+            save_base = root / "nand/user/save/0000000000000000"
+            if not save_base.exists(): continue
+            for profile_dir in save_base.iterdir():
+                if not profile_dir.is_dir(): continue
+                for tid_dir in profile_dir.iterdir():
+                    if tid_dir.is_dir() and re.match(r'^01[0-9A-F]{14}$', tid_dir.name):
+                        if tid_dir.stat().st_mtime > max_mtime:
+                            max_mtime = tid_dir.stat().st_mtime
+                            recent_tid = tid_dir.name
+        return recent_tid
+
+    def _base_dir(self, rom: dict) -> Optional[Path]:
+        tid = self._resolve_title_id(rom)
+        if not tid: return None
+        
+        emu_dir = Path(self.emulator.get("executable_path", "")).parent
+        search_roots = [
+            emu_dir / "user",
+            Path(os.path.expandvars(r'%APPDATA%\eden')),
+            Path(os.path.expandvars(r'%APPDATA%\yuzu')),
+        ]
+        
+        for root in search_roots:
+            save_base = root / "nand/user/save/0000000000000000"
+            if not save_base.exists(): continue
+            for profile_dir in save_base.iterdir():
+                if not profile_dir.is_dir(): continue
+                candidate = profile_dir / tid
+                if candidate.exists(): return candidate
+        return None
+
+    def get_save_files(self, rom: dict) -> list[Path]:
+        base = self._base_dir(rom)
+        if not base or not base.exists(): return []
+        return [p for p in base.rglob("*") if p.is_file()]
+
+    def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
+        base = self._base_dir(rom)
+        if not base: return False
+        base.mkdir(parents=True, exist_ok=True)
+        (base / filename).write_bytes(save_data)
+        return True
+
+    def get_save_dir(self, rom: dict) -> Optional[Path]:
+        return self._base_dir(rom)
+
+
+class DolphinStrategy(SaveStrategy):
+    """
+    Handles Dolphin GCI Folder mode and Region detection.
+    Ports .gci change detection logic from legacy branch.
+    """
+    mode_id = "dolphin"
+
+    def _get_card_dir(self) -> Optional[Path]:
+        emu_dir = Path(self.emulator.get("executable_path", "")).parent
+        portable_gc = emu_dir / "User" / "GC"
+        documents_gc = Path.home() / "Documents" / "Dolphin Emulator" / "GC"
+        gc_base = portable_gc if portable_gc.exists() else documents_gc
+        
+        # Region detection
+        rom_upper = self.rom_path.upper()
+        region = "USA"
+        if any(r in rom_upper for r in ["EUR", "PAL", "EUROPE"]): region = "EUR"
+        elif any(r in rom_upper for r in ["JAP", "JPN", "JAPAN"]): region = "JAP"
+        
+        return gc_base / region / "Card A"
+
+    def get_save_files(self, rom: dict) -> list[Path]:
+        card_dir = self._get_card_dir()
+        if not card_dir or not card_dir.exists(): return []
+        
+        # If we have a session start time, only sync .gci files modified AFTER launch
+        if self.session_start_time > 0:
+            changed = []
+            for gci in card_dir.glob("*.gci"):
+                try:
+                    if gci.stat().st_mtime > self.session_start_time:
+                        changed.append(gci)
+                except Exception: pass
+            return changed
+            
+        return [p for p in card_dir.glob("*.gci") if p.is_file()]
+
+    def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
+        card_dir = self._get_card_dir()
+        if not card_dir: return False
+        card_dir.mkdir(parents=True, exist_ok=True)
+        (card_dir / filename).write_bytes(save_data)
+        return True
+
+    def get_save_dir(self, rom: dict) -> Optional[Path]:
+        return self._get_card_dir()
+
+
+class PS3Strategy(SaveStrategy):
+    """
+    Handles RPCS3 Title ID based savedata mapping.
+    """
+    mode_id = "ps3"
+
+    def _base_dir(self, rom: dict) -> Optional[Path]:
+        import re
+        emu_dir = Path(self.emulator.get("executable_path", "")).parent
+        save_base = emu_dir / "dev_hdd0/home/00000001/savedata"
+        if not save_base.exists():
+            save_base = Path(os.path.expandvars(r'%APPDATA%\RPCS3\dev_hdd0\home\00000001\savedata'))
+        
+        if not save_base.exists(): return None
+        
+        # Try Title ID from ROM path
+        tid_match = re.search(r'([A-Z]{4}\d{5})', self.rom_path)
+        if tid_match:
+            candidate = save_base / tid_match.group(1).upper()
+            if candidate.exists(): return candidate
+            
+        # Fallback: scan subdirs for PARAM.SFO and use most recent
+        subdirs = sorted([d for d in save_base.iterdir() if d.is_dir() and (d / "PARAM.SFO").exists()], 
+                         key=lambda x: x.stat().st_mtime, reverse=True)
+        if subdirs: return subdirs[0]
+        
+        return save_base
+
+    def get_save_files(self, rom: dict) -> list[Path]:
+        base = self._base_dir(rom)
+        if not base or not base.exists(): return []
+        return [p for p in base.rglob("*") if p.is_file()]
+
+    def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
+        base = self._base_dir(rom)
+        if not base: return False
+        base.mkdir(parents=True, exist_ok=True)
+        (base / filename).write_bytes(save_data)
+        return True
+
+    def get_save_dir(self, rom: dict) -> Optional[Path]:
+        return self._base_dir(rom)
+
+
+class CemuStrategy(SaveStrategy):
+    """
+    Handles Wii U (Cemu) mlc01 and User ID mapping.
+    """
+    mode_id = "cemu"
+
+    def _base_dir(self, rom: dict) -> Optional[Path]:
+        emu_dir = Path(self.emulator.get("executable_path", "")).parent
+        mlc_path = emu_dir / "mlc01"
+        if not mlc_path.exists():
+            # Try to parse settings.xml for custom mlc_path
+            settings_xml = emu_dir / "settings.xml"
+            if settings_xml.exists():
+                try:
+                    import xml.etree.ElementTree as ET
+                    mlc_node = ET.parse(settings_xml).getroot().find('.//mlc_path')
+                    if mlc_node is not None and mlc_node.text: mlc_path = Path(mlc_node.text)
+                except Exception: pass
+        
+        if not mlc_path or not mlc_path.exists():
+            mlc_path = Path(os.path.expandvars(r'%APPDATA%\Cemu\mlc01'))
+
+        save_base = mlc_path / "usr/save/00050000"
+        if not save_base.exists(): return None
+        
+        # Find most recently modified title folder
+        title_dirs = sorted([d for d in save_base.iterdir() if d.is_dir()], key=lambda x: x.stat().st_mtime, reverse=True)
+        for title_dir in title_dirs:
+            candidate = title_dir / "user" / "80000001"
+            if candidate.exists(): return candidate
+            
+        return None
+
+    def get_save_files(self, rom: dict) -> list[Path]:
+        base = self._base_dir(rom)
+        if not base or not base.exists(): return []
+        return [p for p in base.rglob("*") if p.is_file()]
+
+    def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
+        base = self._base_dir(rom)
+        if not base: return False
+        base.mkdir(parents=True, exist_ok=True)
+        (base / filename).write_bytes(save_data)
+        return True
+
+    def get_save_dir(self, rom: dict) -> Optional[Path]:
+        return self._base_dir(rom)
+
+
+# Emulator-specific auto-detection hints: id -> list of candidate Path lambdas (tried in order)
+_EMU_SAVE_HINTS: dict[str, list] = {
+    "pcsx2":   [lambda e: Path(e).parent / "memcards",
+                lambda _: Path.home() / "Documents" / "PCSX2" / "memcards"],
+    "dolphin": [lambda e: Path(e).parent / "User" / "GC",
+                lambda _: Path.home() / "Documents" / "Dolphin Emulator" / "GC"],
+    "rpcs3":   [lambda e: Path(e).parent / "dev_hdd0" / "home" / "00000001" / "savedata",
+                lambda _: Path.home() / "AppData" / "Roaming" / "rpcs3" / "dev_hdd0" / "home" / "00000001" / "savedata"],
+    "eden":    [lambda _: Path.home() / "AppData" / "Roaming" / "eden" / "nand" / "user" / "save",
+                lambda _: Path.home() / "AppData" / "Roaming" / "yuzu" / "nand" / "user" / "save"],
+    "cemu":    [lambda e: Path(e).parent / "mlc01" / "usr" / "save",
+                lambda _: Path.home() / "AppData" / "Roaming" / "Cemu" / "mlc01" / "usr" / "save"],
+    "azahar":  [lambda _: Path.home() / "AppData" / "Roaming" / "Azahar" / "user" / "sdmc",
+                lambda _: Path.home() / "AppData" / "Roaming" / "azahar" / "user" / "sdmc"],
+}
 
 
 class FolderStrategy(SaveStrategy):
     """
     Handles emulators that store saves in a dedicated folder.
+    Falls back to emulator-specific auto-detection when path is not configured.
     """
     mode_id = "folder"
-    
+
     def _base_dir(self, rom: dict) -> Optional[Path]:
         res = self.emulator.get("save_resolution", {})
         save_dir = res.get("path") or res.get("save_dir") or res.get("srm_dir")
-        if not save_dir:
-            return None
-        return Path(save_dir)
+        if save_dir:
+            return Path(save_dir)
+        # Auto-detect based on emulator id
+        emu_id = self.emulator.get("id", "")
+        exe = self.emulator.get("executable_path", "")
+        for hint in _EMU_SAVE_HINTS.get(emu_id, []):
+            try:
+                p = hint(exe)
+                if p.exists():
+                    return p
+            except Exception:
+                continue
+        return None
     
     def get_save_files(self, rom: dict) -> list[Path]:
         base = self._base_dir(rom)
@@ -306,6 +660,10 @@ STRATEGY_REGISTRY: dict[str, type[SaveStrategy]] = {
     "file": FileStrategy,
     "direct_file": FileStrategy,
     "windows": WindowsNativeStrategy,
+    "switch": SwitchStrategy,
+    "dolphin": DolphinStrategy,
+    "ps3": PS3Strategy,
+    "cemu": CemuStrategy,
 }
 
 def get_strategy(config: dict, emulator: dict) -> SaveStrategy:
@@ -315,6 +673,13 @@ def get_strategy(config: dict, emulator: dict) -> SaveStrategy:
     mode = emulator.get("save_resolution", {}).get("mode", "retroarch")
     if emulator.get("id") == "windows_native" or emulator.get("is_native"):
         mode = "windows"
-    
+
+    # Emulators configured as 'file' but with no path should use folder auto-detection
+    if mode in ("file", "direct_file"):
+        emu_id = emulator.get("id", "")
+        path = emulator.get("save_resolution", {}).get("path", "")
+        if not path and emu_id in _EMU_SAVE_HINTS:
+            mode = "folder"
+
     cls = STRATEGY_REGISTRY.get(mode, RetroArchStrategy)
     return cls(config, emulator)

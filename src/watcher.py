@@ -14,6 +14,70 @@ from src.utils import calculate_folder_hash, calculate_file_hash, calculate_zip_
 from src import emulators
 from src.save_strategies import get_strategy
 
+class PostSessionSyncThread(QThread):
+    done = Signal(str, bool)   # rom_name, success
+    log  = Signal(str)         # log message for GUI
+    notify = Signal(str, str)  # title, body for tray notification
+
+    def __init__(self, watcher, data):
+        super().__init__()
+        self.watcher = watcher
+        self.data = data
+
+    def run(self):
+        title = self.data.get('title', 'Unknown Game')
+        rom_id = str(self.data.get('rom_id'))
+        emu_id = self.data.get('emulator', {}).get('id', 'unknown')
+        strategy = self.data.get('strategy')
+        rom = self.data.get('game_data')
+
+        try:
+            logging.info(f"[SyncThread] Starting sync for {title}")
+            save_files = strategy.get_save_files(rom)
+            logging.info(f"[SyncThread] Save files: {save_files}")
+
+            if not save_files:
+                logging.info(f"[SyncThread] No save files found for {title}, skipping")
+                self.log.emit(f"💤 No saves found for {title}, skipping upload")
+                self.done.emit(title, True)
+                return
+
+            ok = True  # innocent until proven guilty
+            srm_files   = [f for f in save_files if not f.is_dir() and f.suffix in ('.srm', '.sav')]
+            state_files  = [f for f in save_files if not f.is_dir() and '.state' in f.name]
+            folder_files = [f for f in save_files if f.is_dir()]
+
+            if folder_files:
+                # Folder (e.g. PSP SAVEDATA) — zip and upload as save
+                save_dir = folder_files[0]
+                temp_zip = Path.home() / ".wingosy" / "tmp" / f"upload_{rom_id}.zip"
+                temp_zip.parent.mkdir(parents=True, exist_ok=True)
+                zip_path(str(save_dir), str(temp_zip))
+                ok2, msg = self.watcher.client.upload_save(rom_id, emu_id, str(temp_zip), slot="wingosy-srm")
+                logging.info(f"[SyncThread] Folder upload {'ok' if ok2 else 'failed'}: {msg}")
+                if temp_zip.exists(): temp_zip.unlink()
+                ok = ok and ok2
+
+            for srm in srm_files:
+                ok2, msg = self.watcher.client.upload_save(rom_id, emu_id, str(srm), slot="wingosy-srm")
+                logging.info(f"[SyncThread] SRM upload {'ok' if ok2 else 'failed'}: {msg}")
+                ok = ok and ok2
+
+            for st in state_files:
+                ok2, msg = self.watcher.client.upload_state(rom_id, emu_id, str(st), slot="wingosy-state")
+                logging.info(f"[SyncThread] State upload {'ok' if ok2 else 'failed'}: {msg}")
+                ok = ok and ok2
+
+            status = "✅" if ok else "❌"
+            self.log.emit(f"{status} Sync complete: {title}")
+            self.notify.emit("Wingosy", f"{'✅ Saved to cloud' if ok else '❌ Sync failed'}: {title}")
+            self.done.emit(title, ok)
+        except Exception as e:
+            logging.error(f"[SyncThread] Error for {title}: {e}", exc_info=True)
+            self.log.emit(f"❌ Sync error for {title}: {e}")
+            self.notify.emit("Wingosy", f"❌ Sync error: {title}")
+            self.done.emit(title, False)
+
 class WingosyWatcher(QThread):
     log_signal = Signal(str)
     path_detected_signal = Signal(str, str) # emu_display_name, path
@@ -28,6 +92,7 @@ class WingosyWatcher(QThread):
         self.active_sessions = {}
         self.session_errors = {} # rom_id -> consecutive error count
         self.skip_next_pull_rom_id = None # Flag to prevent double-pull when launching from app
+        self._sync_threads = []
         
         self.tmp_dir = Path.home() / ".wingosy" / "tmp"
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -74,24 +139,52 @@ class WingosyWatcher(QThread):
             time.sleep(5)
 
     def _get_current_hash(self, strategy, rom):
-        files = strategy.get_save_files(rom)
-        if not files: return None
-        h = hashlib.md5()
-        found = False
-        for p in sorted(files):
-            if p.exists():
+        try:
+            files = strategy.get_save_files(rom)
+            if not files: return None
+            h = hashlib.md5()
+            found = False
+            for p in sorted(files):
+                if not p.exists(): continue
                 found = True
-                with open(p, 'rb') as f:
-                    while True:
-                        chunk = f.read(8192)
-                        if not chunk: break
-                        h.update(chunk)
-        return h.hexdigest() if found else None
+                if p.is_dir():
+                    # Handle folder-based saves (e.g. PSP)
+                    f_hash = calculate_folder_hash(str(p))
+                    if f_hash: h.update(f_hash.encode('utf-8'))
+                else:
+                    with open(p, 'rb') as f:
+                        while True:
+                            chunk = f.read(8192)
+                            if not chunk: break
+                            h.update(chunk)
+            return h.hexdigest() if found else None
+        except Exception as e:
+            logging.error(f"[Watcher] Hash calculation failed for {rom.get('name')}: {e}")
+            return None
 
     def _get_max_mtime(self, strategy, rom):
-        files = strategy.get_save_files(rom)
-        if not files: return 0
-        return max((os.path.getmtime(p) for p in files if p.exists()), default=0)
+        try:
+            files = strategy.get_save_files(rom)
+            if not files: return 0
+            
+            mtimes = []
+            for p in files:
+                if not p.exists(): continue
+                if p.is_dir():
+                    # For directories, get max mtime of any file inside
+                    for root, _, walk_files in os.walk(p):
+                        for f in walk_files:
+                            try: mtimes.append(os.path.getmtime(os.path.join(root, f)))
+                            except: pass
+                    # Also include the directory's own mtime
+                    mtimes.append(os.path.getmtime(p))
+                else:
+                    mtimes.append(os.path.getmtime(p))
+            
+            return max(mtimes, default=0)
+        except Exception as e:
+            logging.error(f"[Watcher] MTime check failed for {rom.get('name')}: {e}")
+            return 0
 
     def track_session(self, proc, emu_display_name, game_data, local_rom_path, emu_path, skip_pull=False, windows_save_dir=None):
         try:
@@ -100,7 +193,6 @@ class WingosyWatcher(QThread):
             title = game_data['name']
             
             logging.debug(f"[Sync] track_session for {title} (ROM ID: {rom_id})")
-            logging.debug(f"[Sync] ROM dict keys: {list(game_data.keys())}")
 
             all_emus = emulators.load_emulators()
             this_emu = next((e for e in all_emus if e["name"] == emu_display_name or e["id"] == emu_display_name), None)
@@ -113,6 +205,7 @@ class WingosyWatcher(QThread):
                 return
 
             strategy = get_strategy(self.config, this_emu)
+            strategy.set_session_context(start_time=time.time(), rom_path=local_rom_path)
             logging.debug(f"[Sync] Strategy: {strategy.__class__.__name__}")
             
             # 1. Pull if needed
@@ -164,19 +257,6 @@ class WingosyWatcher(QThread):
 
         self.log_signal.emit(f"🛑 Session Ended: {title}")
         
-        logging.debug(f"[Sync] Post-session check for {title}")
-        logging.debug(f"[Sync] Strategy: {strategy.__class__.__name__}")
-        
-        save_files = strategy.get_save_files(rom)
-        logging.debug(f"[Sync] Found {len(save_files)} save files: {save_files}")
-        
-        for f in save_files:
-            try:
-                mtime = f.stat().st_mtime
-                logging.debug(f"[Sync] {f.name} mtime={mtime}")
-            except Exception as e:
-                logging.debug(f"[Sync] {f.name} stat error: {e}")
-
         new_h = self._get_current_hash(strategy, rom)
         new_m = self._get_max_mtime(strategy, rom)
         
@@ -184,54 +264,39 @@ class WingosyWatcher(QThread):
         
         should_sync = False
         if cached_mtime is None:
-            logging.debug(f"[Sync] No cache entry for {title} → forcing push")
             should_sync = True
         else:
             should_sync = new_m > cached_mtime
-            logging.debug(f"[Sync] cached={cached_mtime} current={new_m} sync={should_sync}")
 
         if not should_sync and new_h == data.get('initial_hash'):
             self.log_signal.emit(f"💤 No changes in {title}. Skipping sync.")
             self._update_playtime(data)
             return
 
-        self.log_signal.emit(f"📤 Changes detected! Syncing...")
-        success = self._perform_sync_upload(data)
-        if success: 
-            self.session_errors[str(rom_id)] = 0
-            # Update cache with current max mtime
-            entry = self.sync_cache.get(str(rom_id), {})
-            entry["save_mtime"] = new_m
-            self.sync_cache[str(rom_id)] = entry
-            self.save_cache()
-        else: 
-            self.session_errors[str(rom_id)] = self.session_errors.get(str(rom_id), 0) + 1
+        self.log_signal.emit(f"📤 Syncing {title} in background...")
+
+        # Start background sync thread — upload happens entirely in the thread
+        thread = PostSessionSyncThread(self, data)
+        thread.log.connect(self.log_signal)
+        thread.notify.connect(self.notify_signal)
+        thread.done.connect(lambda name, ok, rid=rom_id, m=new_m: self._on_sync_thread_done(rid, m, ok))
+
+        self._sync_threads.append(thread)
+        thread.finished.connect(lambda t=thread: self._sync_threads.remove(t) if t in self._sync_threads else None)
+        thread.start()
+        
         self._update_playtime(data)
 
-    def _perform_sync_upload(self, data):
-        rom_id, title, strategy, rom = data['rom_id'], data['title'], data['strategy'], data['game_data']
-        save_files = strategy.get_save_files(rom)
-        if not save_files: return False
-
-        temp_zip = self.tmp_dir / f"upload_{rom_id}.zip"
-        try:
-            if len(save_files) > 1 or save_files[0].is_dir():
-                save_dir = strategy.get_save_dir(rom)
-                if not save_dir: save_dir = save_files[0].parent
-                zip_path(str(save_dir), str(temp_zip))
-            else:
-                with zipfile.ZipFile(temp_zip, 'w', zipfile.ZIP_DEFLATED) as z:
-                    z.write(save_files[0], save_files[0].name)
-
-            if self.client.upload_save(rom_id, str(temp_zip)):
-                self.log_signal.emit(f"✅ Sync Complete for {title}!")
-                return True
-            return False
-        except Exception as e:
-            logging.error(f"[Watcher] Upload failed: {e}")
-            return False
-        finally:
-            if temp_zip.exists(): temp_zip.unlink()
+    def _on_sync_thread_done(self, rom_id, new_m, success):
+        rom_id_str = str(rom_id)
+        if success:
+            self.session_errors[rom_id_str] = 0
+            entry = self.sync_cache.get(rom_id_str, {})
+            entry["save_mtime"] = new_m
+            self.sync_cache[rom_id_str] = entry
+            self.save_cache()
+        else:
+            self.session_errors[rom_id_str] = self.session_errors.get(rom_id_str, 0) + 1
 
     def _do_mid_session_sync(self, data):
         strategy, rom = data['strategy'], data['game_data']
@@ -251,13 +316,15 @@ class WingosyWatcher(QThread):
 
         if should_sync or (new_h and new_h != data.get('last_mid_sync_hash', data.get('initial_hash'))):
             logging.info(f"🔄 Mid-session changes detected for {title}. Syncing...")
-            if self._perform_sync_upload(data):
-                data['last_mid_sync_hash'] = new_h
-                # Update cache
-                entry = self.sync_cache.get(str(rom_id), {})
-                entry["save_mtime"] = new_m
-                self.sync_cache[str(rom_id)] = entry
-                self.save_cache()
+            # Mid-session we still do async via thread — upload happens entirely in the thread
+            thread = PostSessionSyncThread(self, data)
+            thread.log.connect(self.log_signal)
+            thread.notify.connect(self.notify_signal)
+            thread.done.connect(lambda name, ok, rid=rom_id, m=new_m: self._on_sync_thread_done(rid, m, ok))
+            self._sync_threads.append(thread)
+            thread.finished.connect(lambda t=thread: self._sync_threads.remove(t) if t in self._sync_threads else None)
+            thread.start()
+            data['last_mid_sync_hash'] = new_h
 
     def _update_playtime(self, data):
         try:
