@@ -132,7 +132,6 @@ class GameDetailPanel(QWidget):
         
         self.dl_thread = None
         self.extract_thread = None
-        self._conflict_shown = False
         self._is_windows = game.get("platform_slug") in WINDOWS_PLATFORM_SLUGS
         self._local_rom_path = self._get_local_rom_path()
 
@@ -632,41 +631,6 @@ class GameDetailPanel(QWidget):
         if not success:
             return True
             
-        if local_exists and str(rom_id) in watcher.sync_cache and not self._conflict_shown:
-            # Resolve conflict behavior
-            behavior = "ask"
-            if self._is_windows:
-                behavior = self.config.get("windows_conflict_behavior", "ask")
-            else:
-                # Try to find the emulator that would be used
-                all_emus = emulators.load_emulators()
-                assigned_id = self.config.get("platform_assignments", {}).get(self.game.get('platform_slug'))
-                emu = None
-                if assigned_id:
-                    emu = next((e for e in all_emus if e["id"] == assigned_id), None)
-                if not emu:
-                    emu = emulators.get_emulator_for_platform(self.game.get('platform_slug'))
-                if not emu:
-                    emu = next((e for e in all_emus if e["id"] == "retroarch"), None)
-                
-                if emu:
-                    behavior = emu.get("conflict_behavior", "ask")
-
-            if behavior == "prefer_local":
-                if os.path.exists(tmp): os.remove(tmp)
-                return True
-            elif behavior == "ask":
-                self._conflict_shown = True
-                msg = QMessageBox(self)
-                msg.setWindowTitle(f"Conflict — {title} — Wingosy")
-                msg.setText(f"Local {file_type} differs from cloud.")
-                keep_local = msg.addButton("Keep Local", QMessageBox.RejectRole)
-                use_cloud = msg.addButton("Use Cloud", QMessageBox.AcceptRole)
-                msg.exec()
-                if msg.clickedButton() == keep_local:
-                    if os.path.exists(tmp): os.remove(tmp)
-                    return True
-                    
         dest = Path(local_path)
         if is_folder:
             dest.mkdir(parents=True, exist_ok=True)

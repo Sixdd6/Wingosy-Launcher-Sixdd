@@ -52,10 +52,20 @@ class PostSessionSyncThread(QThread):
             init_m = self.data.get('initial_mtime', 0)
 
             if init_h is not None and new_h == init_h and new_m <= init_m:
-                logging.info(f"[SyncThread] No changes detected in files for {title}, skipping upload")
-                self.log.emit(f"💤 No changes in {title}. Skipping sync.")
-                self.done.emit(title, True)
-                return
+                try:
+                    all_saves = self.watcher.client.list_all_saves(str(self.rom_id))
+                    wingosy_saves = [s for s in all_saves if str(s.get('slot','')).startswith('wingosy-srm')]
+                    cloud_missing = len(wingosy_saves) == 0
+                except Exception:
+                    cloud_missing = False
+                
+                if not cloud_missing:
+                    logging.info(f"[SyncThread] No changes detected in files for {title}, skipping upload")
+                    self.log.emit(f"💤 No changes in {title}. Skipping sync.")
+                    self.done.emit(title, True)
+                    return
+                
+                self.log.emit(f"☁️ No wingosy cloud save found for {title}, uploading...")
 
             ok = True  # innocent until proven guilty
             uploaded_count = 0
@@ -358,9 +368,20 @@ class WingosyWatcher(QThread):
 
         if new_h is not None:
             if new_h == data.get('initial_hash'):
-                self.log_signal.emit(f"💤 No changes in {title}. Skipping sync.")
-                self._update_playtime(data)
-                return
+                # Even if unchanged locally, sync if cloud has no save or hash differs
+                try:
+                    all_saves = self.client.list_all_saves(str(rom_id))
+                    wingosy_saves = [s for s in all_saves if str(s.get('slot','')).startswith('wingosy-srm')]
+                    cloud_missing = len(wingosy_saves) == 0
+                except Exception:
+                    cloud_missing = False
+                
+                if not cloud_missing:
+                    self.log_signal.emit(f"💤 No changes in {title}. Skipping sync.")
+                    self._update_playtime(data)
+                    return
+                # Cloud missing — upload anyway
+                self.log_signal.emit(f"☁️ No wingosy cloud save found for {title}, uploading...")
             should_sync = True
         else:
             # Fallback to mtime check ONLY if hash is unavailable
@@ -394,6 +415,7 @@ class WingosyWatcher(QThread):
             self.session_errors[rom_id_str] = 0
             entry = self.sync_cache.get(rom_id_str, {})
             entry["save_mtime"] = new_m
+            entry.pop("save_updated_at", None)
             logging.info(f"[Watcher] Sync success for {rom_id_str}. Cache updated.")
             self.sync_cache[rom_id_str] = entry
             self.save_cache()

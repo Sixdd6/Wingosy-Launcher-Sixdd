@@ -322,7 +322,11 @@ class WingosyMainWindow(QMainWindow):
         is_first_batch = (len(self.all_games) == 0 or len(self.all_games) == len(batch))
         
         if is_first_batch:
+            already_found = {g['id'] for g in self.all_games if g.get('_local_exists')}
             self.all_games = list(batch)
+            for g in self.all_games:
+                if g['id'] in already_found:
+                    g['_local_exists'] = True
             self.library_tab.populate_grid(self.all_games)
         else:
             # Append subsequent batches
@@ -354,10 +358,16 @@ class WingosyMainWindow(QMainWindow):
         
         self.log(f"✅ Library fully loaded: {len(res)} games")
         # Ensure final state is correct (in case batches arrived out of order or were incomplete)
+        already_found = {g['id'] for g in self.all_games if g.get('_local_exists')}
         self.all_games = res
+        for g in self.all_games:
+            if g['id'] in already_found:
+                g['_local_exists'] = True
+
         self._update_platform_filter(res)
         # Final render to ensure everything is in place
         self.library_tab.apply_filters()
+        self._start_local_discovery(self.all_games)
 
     def _update_platform_filter(self, games):
         platforms = sorted(set(
