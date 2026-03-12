@@ -18,6 +18,8 @@ from src.ui.threads import (ImageFetcher, BiosDownloader, DolphinDownloader,
                             LocalDiscoveryWorker)
 from src.ui.widgets import get_resource_path, DownloadQueueWidget, format_speed
 from src.ui.dialogs import SetupDialog, WelcomeDialog, ConflictDialog
+from src.ui.dialogs.emulator_editor import AssetPickerDialog
+from src.emulator_sources import EMULATOR_SOURCES
 from src.ui.tabs.library import LibraryTab
 from src.ui.tabs.emulators import EmulatorsTab
 from src.ui.tabs.settings import SettingsTab
@@ -519,7 +521,7 @@ class WingosyMainWindow(QMainWindow):
             fw_dl = BiosDownloader(self.client, fw, str(target_path))
             self.download_queue.add_download(f"BIOS: {fw['file_name']}", fw_dl)
             
-            fw_dl.progress.connect(lambda p, s: self.log(f"DL BIOS: {p}% @ {format_speed(s)}"))
+            fw_dl.progress.connect(lambda d, t, s: self.log(f"DL BIOS: {100*d/t if t > 0 else 0:.1f}% @ {format_speed(s)}"))
             fw_dl.finished.connect(lambda ok, p: self.log(f"✨ BIOS saved to {p}") if ok else self.log(f"❌ BIOS failed: {p}"))
             fw_dl.finished.connect(lambda: self.download_queue.remove_download(fw_dl))
             fw_dl.finished.connect(lambda t=fw_dl: self.active_threads.remove(t) if t in self.active_threads else None)
@@ -531,19 +533,173 @@ class WingosyMainWindow(QMainWindow):
             return False
 
     def dl_emu(self, name):
-        # NOTE: Emulator downloading logic will need update to support schema-based URLs
-        # For now, we'll maintain the current logic but use the new list
         try:
             all_emus = emulators.load_emulators()
-            emu_data = next((e for e in all_emus if e["name"] == name), None)
-            if not emu_data: return
+            emu = next((e for e in all_emus if e["name"] == name), None)
+            if not emu: return
 
-            # Emulator downloading depends on metadata that's not in the new schema yet
-            # We'll stick to what we have but it might need hardcoded data for now
-            # or we should have kept those fields in DEFAULT_EMULATORS
-            pass
+            source = EMULATOR_SOURCES.get(emu["id"])
+            if not source:
+                self.log(f"❌ No download source configured for {name}")
+                return
+
+            self.log(f"[Debug] dl_emu called for: {name}, id: {emu['id']}, source type: {source['type']}")
+
+            emu_folder = emu.get("folder", emu["id"])
+            base_emu_dir = Path(self.config.get("base_emu_path") or Path.home() / ".wingosy" / "emulators")
+            target_dir = base_emu_dir / emu_folder
+            os.makedirs(target_dir, exist_ok=True)
+
+            def start_download(url, asset_name=None):
+                t = DirectDownloader(url, str(target_dir))
+                display_name = f"{name} ({asset_name})" if asset_name else name
+                self.download_queue.add_download(f"Emulator: {display_name}", t)
+                t.progress.connect(lambda d, t_bytes, s: self.log(f"DL {name}: {100*d/t_bytes if t_bytes > 0 else 0:.1f}% @ {format_speed(s)}"))
+                
+                def on_finished(ok, path, e_data=emu, e_name=name, e_dir=target_dir, thread=t, s_cfg=source):
+                    if ok:
+                        if path.lower().endswith(('.zip', '.7z')):
+                            self.log(f"📦 Extracting {e_name}...")
+                            from src.ui.threads import ExtractionThread
+                            et = ExtractionThread(path, e_dir)
+                            
+                            def on_extracted(success, msg=None, e_data=e_data, e_name=e_name, e_dir=e_dir, p=path, s_cfg=s_cfg):
+                                if success:
+                                    try: os.remove(p)
+                                    except: pass
+                                    finalize_emu(e_data, e_name, e_dir, s_cfg)
+                                else:
+                                    self.log(f"❌ Extraction failed for {e_name}: {msg}")
+
+                            et.finished.connect(lambda: on_extracted(True))
+                            et.error.connect(lambda msg: on_extracted(False, msg))
+                            self.active_threads.append(et)
+                            et.start()
+                        else:
+                            finalize_emu(e_data, e_name, e_dir, s_cfg)
+                    else:
+                        self.log(f"❌ Failed to download {e_name}: {path}")
+                    
+                    self.download_queue.remove_download(thread)
+                    if thread in self.active_threads: self.active_threads.remove(thread)
+
+                def finalize_emu(e_data, e_name, e_dir, s_cfg):
+                    # 1. Try exe_hint first
+                    hint = s_cfg.get("exe_hint")
+                    exe_path = None
+                    if hint:
+                        for p in Path(e_dir).rglob(hint):
+                            exe_path = str(p)
+                            break
+                    
+                    # 2. Fall back to largest .exe
+                    if not exe_path:
+                        max_size = -1
+                        for p in Path(e_dir).rglob("*.exe"):
+                            size = p.stat().st_size
+                            if size > max_size:
+                                    max_size = size
+                                    exe_path = str(p)
+                    
+                    if exe_path:
+                        e_data["executable_path"] = exe_path
+                        emulators.save_emulators(all_emus)
+                        self.log(f"✅ {e_name} downloaded and configured.")
+                        self.emulators_tab.populate_emus()
+                    else:
+                        self.log(f"⚠ {e_name} downloaded, but no .exe found in {e_dir}")
+
+                t.finished.connect(on_finished)
+                self.active_threads.append(t)
+                t.start()
+
+            if source["type"] == "github":
+                # Fetch assets from GitHub
+                import requests
+                repo = source["repo"]
+                self.log(f"🔍 Fetching latest releases for {name}...")
+                api_url = f"https://api.github.com/repos/{repo}/releases/latest"
+                headers = {'User-Agent': 'WingosyLauncher'}
+                verify = os.environ.get('REQUESTS_CA_BUNDLE', True)
+                
+                try:
+                    resp = requests.get(api_url, timeout=15, headers=headers, verify=verify)
+                    self.log(f"[Debug] GitHub API response: {resp.status_code} for {repo}")
+                except Exception as ex:
+                    self.log(f"❌ GitHub API request failed: {ex}")
+                    return
+
+                if resp.status_code != 200:
+                    self.log(f"❌ Failed to fetch GitHub releases for {name}")
+                    return
+                
+                assets = resp.json().get("assets", [])
+                filters = source.get("asset_filters", {})
+                req_k = filters.get("required", [])
+                exc_k = filters.get("excluded", [])
+                
+                valid_assets = []
+                for a in assets:
+                    aname = a["name"].lower()
+                    if not any(aname.endswith(ext) for ext in [".zip", ".7z"]): continue
+                    if any(x in aname for x in exc_k): continue
+                    if all(k in aname for k in req_k):
+                        valid_assets.append(a)
+                
+                if not valid_assets:
+                    self.log(f"❌ No suitable Windows assets found for {name}")
+                    return
+                
+                if len(valid_assets) == 1:
+                    start_download(valid_assets[0]["browser_download_url"], valid_assets[0]["name"])
+                else:
+                    self.picker = AssetPickerDialog(name, valid_assets, self)
+                    self.picker.asset_selected.connect(lambda n, u: start_download(u, n))
+                    self.picker.show()
+
+            elif source["type"] == "direct":
+                start_download(source["url"])
+
+            elif source["type"] == "dolphin_api":
+                # specialized downloader
+                t = DolphinDownloader(str(target_dir))
+                self.download_queue.add_download(f"Emulator: {name}", t)
+                t.progress.connect(lambda d, t_bytes, s: self.log(f"DL {name}: {100*d/t_bytes if t_bytes > 0 else 0:.1f}% @ {format_speed(s)}"))
+                
+                def on_finished_dolphin(ok, path, e_data=emu, e_name=name, e_dir=target_dir, thread=t, s_cfg=source):
+                    if ok:
+                        if path.lower().endswith(('.zip', '.7z')):
+                            self.log(f"📦 Extracting {e_name}...")
+                            from src.ui.threads import ExtractionThread
+                            et = ExtractionThread(path, e_dir)
+                            
+                            def on_extracted_dolphin(success, msg=None, e_data=e_data, e_name=e_name, e_dir=e_dir, p=path, s_cfg=s_cfg):
+                                if success:
+                                    try: os.remove(p)
+                                    except: pass
+                                    finalize_emu(e_data, e_name, e_dir, s_cfg)
+                                else:
+                                    self.log(f"❌ Extraction failed for {e_name}: {msg}")
+
+                            et.finished.connect(lambda: on_extracted_dolphin(True))
+                            et.error.connect(lambda msg: on_extracted_dolphin(False, msg))
+                            self.active_threads.append(et)
+                            et.start()
+                        else:
+                            finalize_emu(e_data, e_name, e_dir, s_cfg)
+                    else:
+                        self.log(f"❌ Failed to download {e_name}: {path}")
+                    self.download_queue.remove_download(thread)
+                    if thread in self.active_threads: self.active_threads.remove(thread)
+
+                t.finished.connect(on_finished_dolphin)
+                self.active_threads.append(t)
+                t.start()
+
         except Exception as e:
             self.log(f"❌ Error starting emulator download: {e}")
+
+
 
     def st_ep(self, name):
         # This is now handled in EmulatorsTab.edit_emulator_path
@@ -598,36 +754,41 @@ class WingosyMainWindow(QMainWindow):
 
     @Slot(str, str, str, str)
     def handle_conflict(self, title, local_path, temp_dl, rom_id):
-        dialog = ConflictDialog(title, self)
-        if dialog.exec() == QDialog.Accepted:
-            mode = dialog.result_mode
-            # Only skip next pull if user explicitly chose to keep their local file
-            if mode == "local":
-                print(f"[PULL DEBUG] User chose Keep Local. Setting skip_next_pull for {rom_id}")
-                self.watcher.skip_next_pull_rom_id = str(rom_id)
-            else:
-                self.watcher.skip_next_pull_rom_id = None
+        try:
+            dialog = ConflictDialog(title, self)
+            if dialog.exec() == QDialog.Accepted:
+                mode = dialog.result_mode
+                # Only skip next pull if user explicitly chose to keep their local file
+                if mode == "local":
+                    print(f"[PULL DEBUG] User chose Keep Local. Setting skip_next_pull for {rom_id}")
+                    self.watcher.skip_next_pull_rom_id = str(rom_id)
+                else:
+                    self.watcher.skip_next_pull_rom_id = None
 
-            # Always clear it after 30 seconds max to prevent it sticking forever
-            QTimer.singleShot(30000, lambda: setattr(
-                self.watcher, 'skip_next_pull_rom_id', None))
+                # Always clear it after 30 seconds max to prevent it sticking forever
+                QTimer.singleShot(30000, lambda: setattr(
+                    self.watcher, 'skip_next_pull_rom_id', None))
 
-            if mode == "cloud":
-                t = ConflictResolveThread(self.watcher, rom_id, title, local_path, os.path.isdir(local_path))
-                t.finished.connect(lambda ok: self.log("✅ Cloud save applied." if ok else "❌ Cloud save apply failed."))
-                t.finished.connect(lambda t=t: self.active_threads.remove(t) if t in self.active_threads else None)
-                self.active_threads.append(t)
-                t.start()
-            elif mode == "both":
-                cloud_bak = str(local_path) + ".cloud_backup"
-                if os.path.exists(cloud_bak):
-                    if os.path.isdir(cloud_bak): shutil.rmtree(cloud_bak, ignore_errors=True)
-                    else: os.remove(cloud_bak)
-                shutil.copy2(temp_dl, cloud_bak) if not os.path.isdir(temp_dl) else shutil.copytree(temp_dl, cloud_bak)
-                self.log(f"📁 Cloud save backed up to: {cloud_bak}")
-        if os.path.exists(temp_dl):
-            try: os.remove(temp_dl) if not os.path.isdir(temp_dl) else shutil.rmtree(temp_dl, ignore_errors=True)
-            except: pass
+                if mode == "cloud":
+                    t = ConflictResolveThread(self.watcher, rom_id, title, local_path, os.path.isdir(local_path))
+                    t.finished.connect(lambda ok: self.log("✅ Cloud save applied." if ok else "❌ Cloud save apply failed."))
+                    t.finished.connect(lambda t=t: self.active_threads.remove(t) if t in self.active_threads else None)
+                    self.active_threads.append(t)
+                    t.start()
+                elif mode == "both":
+                    cloud_bak = str(local_path) + ".cloud_backup"
+                    if os.path.exists(cloud_bak):
+                        if os.path.isdir(cloud_bak): shutil.rmtree(cloud_bak, ignore_errors=True)
+                        else: os.remove(cloud_bak)
+                    shutil.copy2(temp_dl, cloud_bak) if not os.path.isdir(temp_dl) else shutil.copytree(temp_dl, cloud_bak)
+                    self.log(f"📁 Cloud save backed up to: {cloud_bak}")
+            
+            if os.path.exists(temp_dl):
+                try: os.remove(temp_dl) if not os.path.isdir(temp_dl) else shutil.rmtree(temp_dl, ignore_errors=True)
+                except: pass
+        finally:
+            if self.watcher:
+                self.watcher._active_conflicts.discard(str(rom_id))
 
     @Slot(str, str)
     def show_notification(self, title, msg):

@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 import ctypes
 import sys
@@ -157,9 +158,18 @@ class GameCard(QWidget):
         self.title_label.setStyleSheet("color: white; font-weight: bold; border: none;")
         self.title_label.setWordWrap(False)
         self.title_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.title_label.setText(elide_text(game.get('name', 'Unknown')))   
-        self.title_label.setToolTip(game.get('name', 'Unknown'))
+        
+        display_name = game.get('name', 'Unknown')
+        fs_name = game.get('fs_name', '')
+        disc_match = re.search(r'\((disc|disk|cd)\s*(\d+)\)', fs_name, re.IGNORECASE)
+        if disc_match:
+            disc_num = disc_match.group(2)
+            display_name = f"[D{disc_num}] {display_name}"
+            
+        self.title_label.setText(elide_text(display_name))   
+        self.title_label.setToolTip(display_name)
         layout.addWidget(self.title_label)
+        self.disc_label = None
         self.fetcher = None
         self._full_pixmap = None
 
@@ -219,15 +229,19 @@ class GameCard(QWidget):
         return None
 
     def set_image(self, game_id, pixmap):
-        self._full_pixmap = pixmap
-        w = self.img_label.width()
-        h = self.img_label.height()
-        if w > 0 and h > 0:
-            self.img_label.setPixmap(
-                pixmap.scaled(w, h,
-                    Qt.KeepAspectRatioByExpanding,
-                    Qt.SmoothTransformation)
-            )
+        try:
+            self._full_pixmap = pixmap
+            w = self.img_label.width()
+            h = self.img_label.height()
+            if w > 0 and h > 0:
+                self.img_label.setPixmap(
+                    pixmap.scaled(w, h,
+                        Qt.KeepAspectRatioByExpanding,
+                        Qt.SmoothTransformation)
+                )
+        except RuntimeError:
+            # Widget might have been deleted while thread was finishing
+            pass
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -235,6 +249,7 @@ class GameCard(QWidget):
 
 class LibraryTab(QWidget):
     def __init__(self, main_window):
+        # ... (rest of __init__ is unchanged)
         super().__init__()
         self.main_window = main_window
         self.client = main_window.client
@@ -543,6 +558,8 @@ class LibraryTab(QWidget):
 
                 if matches_search and matches_platform:
                     card = GameCard(game, self.client, self.config, sync_cache)
+                    if game.get('_local_exists'):
+                        card.set_local_exists(True)
                     card.clicked.connect(lambda g=game: self.open_detail(g))
                     card.setFixedSize(card_w, card_h)
                     card.img_label.setFixedSize(card_w - 10, card_h - 30)   
@@ -724,14 +741,20 @@ class LibraryTab(QWidget):
 
     def update_game_local_status(self, game_id, exists):
         """Dynamically updates a GameCard's checkmark status."""
-        for i in range(self.grid_layout.count()):
-            widget = self.grid_layout.itemAt(i).widget()
-            if isinstance(widget, GameCard) and widget.game['id'] == game_id:
-                widget.set_local_exists(exists)
-                # Re-apply filters if we are in an install-specific view
-                if self.current_install_filter != "all":
-                    self.apply_filters()
-                break
+        found = False
+        for card in self._all_cards:
+            try:
+                if card.game.get('id') == game_id:
+                    card.set_local_exists(exists)
+                    found = True
+                    break
+            except RuntimeError:
+                continue
+
+        if found and self.current_install_filter != "all":
+            # Re-apply filters if we are in an install-specific view (e.g. "Not Installed")
+            # so the card can disappear or appear correctly.
+            self.apply_filters()
 
     def populate_games(self, games, status=None):
         """Standard method to populate the grid from a list of games."""
@@ -744,7 +767,21 @@ class LibraryTab(QWidget):
         # check this and abort immediately
         self._render_generation += 1
         my_gen = self._render_generation
+        
+        # Clear image fetch state in main window
         self.main_window.image_fetch_queue = []
+        # Stop any active fetchers to prevent "QThread: Destroyed while running"
+        for f in self.main_window.active_image_fetchers[:]:
+            try:
+                if f.isRunning():
+                    # We don't terminate() because it's unsafe, 
+                    # but by clearing the list, we let them finish 
+                    # and they'll be ignored by generation check.
+                    pass
+            except RuntimeError:
+                pass
+        self.main_window.active_image_fetchers = []
+
         self.retry_btn.setVisible(False)
         self._all_cards = []
         self._pending_games = list(games)  # full list, render in batches   
@@ -816,8 +853,11 @@ class LibraryTab(QWidget):
                 if generation != self._render_generation:
                     return
 
-                card = GameCard(game, self.client, self.config, sync_cache) 
-                card.clicked.connect(lambda g=game: self.open_detail(g))    
+                card = GameCard(game, self.client, self.config, sync_cache)
+                if game.get('_local_exists'):
+                    card.set_local_exists(True)
+                card.clicked.connect(lambda g=game: self.open_detail(g))
+    
                 card.setFixedSize(card_w, card_h)
                 card.img_label.setFixedSize(card_w - 10, card_h - 30)       
                 card.title_label.setFixedWidth(card_w - 10)

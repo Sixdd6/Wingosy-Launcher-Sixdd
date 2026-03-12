@@ -332,6 +332,11 @@ class RomMClient:
             return False
 
     def get_latest_save(self, rom_id):
+        items = self.list_all_saves(rom_id)
+        if not items: return None
+        return sorted(items, key=lambda x: x.get("updated_at", ""), reverse=True)[0]
+
+    def list_all_saves(self, rom_id):
         try:
             r = requests.get(
                 f"{self.host}/api/saves",
@@ -340,21 +345,29 @@ class RomMClient:
                 timeout=REQUEST_TIMEOUT,
                 verify=CERTIFI_PATH
             )
-            if r.status_code != 200:
-                return None
+            if r.status_code != 200: return []
             items = r.json()
-            if not isinstance(items, list):
-                items = items.get("items", [])
-            if not items:
-                return None
-            return sorted(items,
-                key=lambda x: x.get("updated_at", ""),
-                reverse=True)[0]
+            return items if isinstance(items, list) else items.get("items", [])
         except Exception as e:
-            print(f"[API] get_latest_save error: {e}")
-            return None
+            print(f"[API] list_all_saves error: {e}")
+            return []
+
+    def delete_save(self, save_id):
+        try:
+            url = f"{self.host}/api/saves/{save_id}"
+            r = requests.delete(url, headers=self.get_auth_headers(), 
+                                timeout=REQUEST_TIMEOUT, verify=CERTIFI_PATH)
+            return r.status_code in [200, 204]
+        except Exception as e:
+            print(f"[API] delete_save error: {e}")
+            return False
 
     def get_latest_state(self, rom_id):
+        items = self.list_all_states(rom_id)
+        if not items: return None
+        return sorted(items, key=lambda x: x.get("updated_at", ""), reverse=True)[0]
+
+    def list_all_states(self, rom_id):
         try:
             r = requests.get(
                 f"{self.host}/api/states",
@@ -363,19 +376,22 @@ class RomMClient:
                 timeout=REQUEST_TIMEOUT,
                 verify=CERTIFI_PATH
             )
-            if r.status_code != 200:
-                return None
+            if r.status_code != 200: return []
             items = r.json()
-            if not isinstance(items, list):
-                items = items.get("items", [])
-            if not items:
-                return None
-            return sorted(items,
-                key=lambda x: x.get("updated_at", ""),
-                reverse=True)[0]
+            return items if isinstance(items, list) else items.get("items", [])
         except Exception as e:
-            print(f"[API] get_latest_state error: {e}")
-            return None
+            print(f"[API] list_all_states error: {e}")
+            return []
+
+    def delete_state(self, state_id):
+        try:
+            url = f"{self.host}/api/states/{state_id}"
+            r = requests.delete(url, headers=self.get_auth_headers(), 
+                                timeout=REQUEST_TIMEOUT, verify=CERTIFI_PATH)
+            return r.status_code in [200, 204]
+        except Exception as e:
+            print(f"[API] delete_state error: {e}")
+            return False
 
     def download_save(self, save_item, target_path, thread=None):
         try:
@@ -423,7 +439,7 @@ class RomMClient:
             print(f"[API] download_state error: {e}")
             return False
 
-    def upload_save(self, rom_id, emulator, file_obj, slot="wingosy-windows", raw=False):
+    def upload_save(self, rom_id, emulator, file_obj, slot="wingosy-windows", raw=False, filename_override=None):
         try:
             url = f"{self.host}/api/saves"
             params = {"rom_id": rom_id, "emulator": emulator, "slot": slot}
@@ -432,11 +448,11 @@ class RomMClient:
             if isinstance(file_obj, str):
                 f = open(file_obj, 'rb')
                 close_after = True
-                filename = os.path.basename(file_obj)
+                filename = filename_override or os.path.basename(file_obj)
             else:
                 f = file_obj
                 close_after = False
-                filename = "save.zip"
+                filename = filename_override or "save.zip"
             
             # Strip .auto suffix 
             if filename.endswith('.auto'):
@@ -454,18 +470,18 @@ class RomMClient:
             print(f"[API] upload_save error: {e}")
             return False, str(e)
 
-    def upload_state(self, rom_id, emulator, file_obj, slot="wingosy-state"):
+    def upload_state(self, rom_id, emulator, file_obj, slot="wingosy-state", filename_override=None):
         try:
             from pathlib import Path
             
             if isinstance(file_obj, str):
                 f = open(file_obj, 'rb')
                 close_after = True
-                filename = Path(file_obj).name
+                filename = filename_override or Path(file_obj).name
             else:
                 f = file_obj
                 close_after = False
-                filename = "state.state"
+                filename = filename_override or "state.state"
             
             # Strip .auto suffix 
             if filename.endswith('.auto'):
@@ -480,6 +496,7 @@ class RomMClient:
             params = {
                 "rom_id": rom_id,
                 "emulator": emulator,
+                "slot": slot
             }
             
             try:

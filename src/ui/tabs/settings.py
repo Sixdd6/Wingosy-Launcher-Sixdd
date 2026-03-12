@@ -279,6 +279,13 @@ class SettingsTab(QWidget):
         self.ra_combo.currentTextChanged.connect(self.set_ra_save_mode)
         self._apply_widget_style(self.ra_combo)
         layout.addWidget(self._make_row("RetroArch Mode", self.ra_combo))
+
+        self.ver_spin = QSpinBox()
+        self.ver_spin.setRange(1, 20)
+        self.ver_spin.setValue(self.config.get("max_save_versions", 5))
+        self.ver_spin.valueChanged.connect(lambda val: self.config.set("max_save_versions", val))
+        self._apply_widget_style(self.ver_spin)
+        layout.addWidget(self._make_row("Max Cloud Versions", self.ver_spin))
         
         self.scroll_layout.addWidget(card)
 

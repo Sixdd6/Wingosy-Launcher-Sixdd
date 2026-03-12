@@ -256,7 +256,7 @@ class ExtractionThread(QThread):
             logging.warning(f"[Extract] Strip root failed: {e}")
 
 class BaseDownloader(QThread):
-    progress = Signal(int, int, float) # downloaded, total, speed
+    progress = Signal(float, float, float) # downloaded, total, speed
     finished = Signal(bool, str)
     cancelled = Signal()
 
@@ -300,9 +300,9 @@ class BaseDownloader(QThread):
                             speed = (downloaded - self._last_bytes) / elapsed
                             self._last_bytes = downloaded
                             self._last_time = now
-                            self.progress.emit(downloaded, total, speed)
+                            self.progress.emit(float(downloaded), float(total), float(speed))
                         else:
-                            self.progress.emit(downloaded, total, 0)
+                            self.progress.emit(float(downloaded), float(total), 0.0)
 
             return True, target_path
         except Exception as e:
@@ -383,7 +383,7 @@ class GithubDownloader(BaseDownloader):
             self.finished.emit(False, str(e))
 
 class RomDownloader(QThread):
-    progress = Signal(int, int, float) # downloaded, total, speed
+    progress = Signal(float, float, float) # downloaded, total, speed
     finished = Signal(bool, str)
     cancelled = Signal()
 
@@ -411,9 +411,9 @@ class RomDownloader(QThread):
                     speed = (d - self._last_bytes) / elapsed
                     self._last_bytes = d
                     self._last_time = now
-                    self.progress.emit(d, t, speed)
+                    self.progress.emit(float(d), float(t), float(speed))
                 else:
-                    self.progress.emit(d, t, 0)
+                    self.progress.emit(float(d), float(t), 0.0)
         
         success = self.client.download_rom(self.rom_id, self.file_name, self.target_path, cb, thread=self)
         if self._cancelled:
@@ -422,7 +422,7 @@ class RomDownloader(QThread):
             self.finished.emit(success, self.target_path)
 
 class BiosDownloader(QThread):
-    progress = Signal(int, int, float)
+    progress = Signal(float, float, float)
     finished = Signal(bool, str)
     cancelled = Signal()
 
@@ -449,9 +449,9 @@ class BiosDownloader(QThread):
                     speed = (d - self._last_bytes) / elapsed
                     self._last_bytes = d
                     self._last_time = now
-                    self.progress.emit(d, t, speed)
+                    self.progress.emit(float(d), float(t), float(speed))
                 else:
-                    self.progress.emit(d, t, 0)
+                    self.progress.emit(float(d), float(t), 0.0)
 
         success = False
         if self.fw.get('is_rom'):

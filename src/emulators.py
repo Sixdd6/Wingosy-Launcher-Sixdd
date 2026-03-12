@@ -26,7 +26,7 @@ DEFAULT_EMULATORS = [
         "launch_args": ["{rom_path}"],
         "platform_slugs": ["switch", "nintendo-switch"],
         "save_resolution": {
-            "mode": "folder",
+            "mode": "switch",
             "path": ""
         },
         "user_defined": False,
@@ -40,7 +40,7 @@ DEFAULT_EMULATORS = [
         "launch_args": ["{rom_path}"],
         "platform_slugs": ["ps3", "playstation-3", "playstation3"],
         "save_resolution": {
-            "mode": "folder",
+            "mode": "ps3",
             "path": ""
         },
         "user_defined": False,
@@ -54,7 +54,7 @@ DEFAULT_EMULATORS = [
         "launch_args": ["{rom_path}"],
         "platform_slugs": ["gc", "ngc", "wii", "gamecube", "nintendo-gamecube", "nintendo-wii", "wii-u-vc"],
         "save_resolution": {
-            "mode": "file",
+            "mode": "dolphin",
             "path": ""
         },
         "user_defined": False,
@@ -68,7 +68,7 @@ DEFAULT_EMULATORS = [
         "launch_args": ["{rom_path}"],
         "platform_slugs": ["ps2", "playstation-2", "playstation2"],
         "save_resolution": {
-            "mode": "file",
+            "mode": "folder",
             "path": ""
         },
         "user_defined": False,
@@ -82,7 +82,7 @@ DEFAULT_EMULATORS = [
         "launch_args": ["-g", "{rom_path}"],
         "platform_slugs": ["wiiu", "wii-u", "nintendo-wii-u", "nintendo-wiiu"],
         "save_resolution": {
-            "mode": "folder",
+            "mode": "cemu",
             "path": ""
         },
         "user_defined": False,

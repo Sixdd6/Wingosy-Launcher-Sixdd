@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from PySide6.QtWidgets import (QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QScrollArea, QFileDialog)
+from PySide6.QtWidgets import (QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QScrollArea, QFileDialog, QFrame)
 from PySide6.QtCore import Qt, Signal, QThread, QTimer
 from PySide6.QtGui import QFontMetrics
 
@@ -313,3 +313,207 @@ class SaveSyncSetupDialog(QWidget):
             self.selected_path = directory
             self.accepted.emit()
             self.close()
+
+class CloudSaveManagerDialog(QWidget):
+    def __init__(self, game, client, config, main_window, parent=None):
+        super().__init__(parent)
+        self.game = game
+        self.client = client
+        self.config = config
+        self.main_window = main_window
+        
+        self.setWindowTitle(f"Cloud Save History — {game.get('name')} — Wingosy")
+        self.setFixedSize(600, 450)
+        self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint | Qt.WindowTitleHint)
+        
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #1a1a1a;
+                color: #ffffff;
+            }
+            QLabel { color: #ffffff; }
+            QPushButton { border-radius: 4px; padding: 6px; }
+            QScrollArea { background: transparent; border: none; }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+
+        layout.addWidget(QLabel(f"<b>Cloud Save History for {game.get('name')}</b>"))
+        
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet("background: #111; border: 1px solid #333; border-radius: 4px;")
+        
+        self.list_container = QWidget()
+        self.list_layout = QVBoxLayout(self.list_container)
+        self.list_layout.setAlignment(Qt.AlignTop)
+        self.scroll.setWidget(self.list_container)
+        layout.addWidget(self.scroll)
+
+        self.refresh_btn = QPushButton("🔄 Refresh History")
+        self.refresh_btn.setStyleSheet("background: #333; color: white;")
+        self.refresh_btn.clicked.connect(self.load_history)
+        layout.addWidget(self.refresh_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("background: #444; color: #ccc;")
+        close_btn.clicked.connect(self.close)
+        layout.addWidget(close_btn)
+
+        QTimer.singleShot(0, self._apply_dark_frame)
+        QTimer.singleShot(50, self._center_on_parent)
+        QTimer.singleShot(100, self.load_history)
+
+    def _apply_dark_frame(self):
+        import sys, ctypes
+        if sys.platform == "win32":
+            try: ctypes.windll.dwmapi.DwmSetWindowAttribute(int(self.winId()), 20, ctypes.byref(ctypes.c_int(1)), 4)
+            except: pass
+
+    def _center_on_parent(self):
+        p = self.parent()
+        if not p: return
+        pg = p.geometry()
+        x = pg.x() + (pg.width() - self.width()) // 2
+        y = pg.y() + (pg.height() - self.height()) // 2
+        self.move(x, y)
+
+    def load_history(self):
+        # Clear list
+        while self.list_layout.count():
+            child = self.list_layout.takeAt(0)
+            if child.widget(): child.widget().deleteLater()
+        
+        self.list_layout.addWidget(QLabel("Loading history..."))
+        
+        class HistoryWorker(QThread):
+            ready = Signal(list, list)
+            def __init__(self, client, rid):
+                super().__init__()
+                self.client, self.rid = client, rid
+            def run(self):
+                saves = self.client.list_all_saves(self.rid)
+                states = self.client.list_all_states(self.rid)
+                self.ready.emit(saves, states)
+
+        self.worker = HistoryWorker(self.client, self.game['id'])
+        self.worker.ready.connect(self._on_history_ready)
+        self.worker.start()
+
+    def _on_history_ready(self, saves, states):
+        while self.list_layout.count():
+            child = self.list_layout.takeAt(0)
+            if child.widget(): child.widget().deleteLater()
+
+        all_items = []
+        for s in saves:
+            s['_type'] = 'save'
+            all_items.append(s)
+        for s in states:
+            s['_type'] = 'state'
+            all_items.append(s)
+        
+        if not all_items:
+            self.list_layout.addWidget(QLabel("No cloud saves found for this game."))
+            return
+
+        all_items.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
+
+        for item in all_items:
+            row = QFrame()
+            row.setStyleSheet("background: #222; border-radius: 4px; margin-bottom: 2px;")
+            rl = QHBoxLayout(row)
+            
+            icon = "💾" if item['_type'] == 'save' else "📸"
+            date_str = item.get('updated_at', 'Unknown Date').replace('T', ' ').split('.')[0]
+            
+            info = QVBoxLayout()
+            name_lbl = QLabel(f"<b>{icon} {item.get('name', 'Unnamed')}</b>")
+            name_lbl.setStyleSheet("font-size: 11px;")
+            date_lbl = QLabel(date_str)
+            date_lbl.setStyleSheet("font-size: 10px; color: #888;")
+            info.addWidget(name_lbl)
+            info.addWidget(date_lbl)
+            rl.addLayout(info, 1)
+
+            restore_btn = QPushButton("Restore")
+            restore_btn.setFixedWidth(80)
+            restore_btn.setStyleSheet("background: #2e7d32; color: white; font-size: 10px;")
+            restore_btn.clicked.connect(lambda checked, i=item: self.restore_version(i))
+            rl.addWidget(restore_btn)
+
+            del_btn = QPushButton("🗑")
+            del_btn.setFixedWidth(30)
+            del_btn.setStyleSheet("background: #8e0000; color: white; font-size: 10px;")
+            del_btn.clicked.connect(lambda checked, i=item: self.delete_version(i))
+            rl.addWidget(del_btn)
+
+            self.list_layout.addWidget(row)
+
+    def restore_version(self, item):
+        msg = f"Restore this {item['_type']}?\n\nYour current local save will be backed up to .bak first."
+        if QMessageBox.question(self, "Restore Version — Wingosy", msg) != QMessageBox.Yes:
+            return
+
+        # Use extraction/restore logic from GameDetailPanel? 
+        # Actually watcher.pull_server_save or similar is better.
+        
+        # We need the emulator to get the strategy
+        all_emus = emulators.load_emulators()
+        platform = self.game.get('platform_slug')
+        assigned_id = self.config.get("platform_assignments", {}).get(platform)
+        emu = next((e for e in all_emus if e["id"] == assigned_id), None)
+        if not emu: emu = emulators.get_emulator_for_platform(platform)
+        if not emu: emu = next((e for e in all_emus if e["id"] == "retroarch"), None)
+
+        if not emu:
+            QMessageBox.warning(self, "Error", "Could not determine emulator for restoration.")
+            return
+
+        strategy = get_strategy(self.config, emu)
+        # Find local path
+        save_dir = strategy.get_save_dir(self.game)
+        is_folder = (strategy.mode_id in ["folder", "windows"])
+        local_path = str(save_dir) if save_dir else None
+        if not local_path:
+            files = strategy.get_save_files(self.game)
+            if files: local_path = str(files[0])
+        
+        if not local_path:
+            # Last resort: RA defaults
+            if emu['id'] == 'retroarch':
+                from pathlib import Path
+                ra_dir = Path(emu['executable_path']).parent
+                local_path = str(ra_dir / "saves")
+            else:
+                QMessageBox.warning(self, "Error", "Could not determine local save path.")
+                return
+
+        # Start restoration
+        from src.ui.threads import ConflictResolveThread
+        # Use ConflictResolveThread as a "Force Pull" thread
+        self.rt = ConflictResolveThread(self.main_window.watcher, self.game['id'], self.game['name'], item, local_path, is_folder)
+        self.rt.finished.connect(lambda ok: QMessageBox.information(self, "Done", "Save restored successfully!") if ok else QMessageBox.warning(self, "Failed", "Restoration failed."))
+        self.rt.start()
+
+    def delete_version(self, item):
+        if QMessageBox.question(self, "Delete version?", "Delete this version from the cloud permanently?") != QMessageBox.Yes:
+            return
+        
+        success = False
+        if item['_type'] == 'save':
+            success = self.client.delete_save(item['id'])
+        else:
+            success = self.client.delete_state(item['id'])
+        
+        if success:
+            self.load_history()
+        else:
+            QMessageBox.warning(self, "Error", "Delete failed.")
+
+from src import emulators
+from src.save_strategies import get_strategy
+from src.ui.widgets import format_speed
+from src.ui.threads import ConflictResolveThread

@@ -108,3 +108,75 @@ class ExePickerDialog(QWidget):
             self.close()
         else:
             QMessageBox.warning(self, "No Selection — Wingosy", "Please select an executable.")
+
+class AssetPickerDialog(QWidget):
+    from PySide6.QtCore import Signal
+    asset_selected = Signal(str, str) # name, url
+
+    def __init__(self, emulator_name, assets, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint | Qt.WindowTitleHint)
+        self.setFixedSize(600, 450)
+        self.setWindowTitle(f"Download {emulator_name} — Wingosy")
+        
+        self.setStyleSheet("""
+            QWidget { background-color: #1a1a1a; color: #ffffff; }
+            QLabel { color: #ffffff; background: transparent; }
+            QPushButton { border-radius: 4px; padding: 10px 20px; font-weight: bold; }
+            QListWidget { background-color: #2b2b2b; color: #ffffff; border: 1px solid #555; font-size: 10pt; }
+            QListWidget::item { padding: 12px; border-bottom: 1px solid #3a3a3a; }
+            QListWidget::item:selected { background-color: #0d6efd; color: #ffffff; }
+            QListWidget::item:hover { background-color: #3a3a3a; }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+
+        header = QLabel(f"Select a version of {emulator_name} to download:")
+        header.setStyleSheet("font-size: 12pt; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(header)
+
+        self.list_widget = QListWidget()
+        layout.addWidget(self.list_widget)
+
+        # Filter and add assets
+        excluded_exts = (".tar.zst", ".AppImage", ".zsync", ".sig")
+        for asset in assets:
+            name = asset["name"]
+            if any(name.endswith(ext) for ext in excluded_exts): continue
+            if "Source" in name: continue
+            
+            item = QListWidgetItem(name)
+            item.setData(Qt.UserRole, asset["browser_download_url"])
+            self.list_widget.addItem(item)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet("background: #444; color: #eee;")
+        cancel_btn.clicked.connect(self.close)
+        btns.addWidget(cancel_btn)
+
+        confirm_btn = QPushButton("⬇ Download Selected")
+        confirm_btn.setStyleSheet("background: #0d6efd; color: white;")
+        confirm_btn.clicked.connect(self.confirm)
+        btns.addWidget(confirm_btn)
+
+        layout.addLayout(btns)
+        QTimer.singleShot(0, self._apply_dark_frame)
+
+    def _apply_dark_frame(self):
+        import sys, ctypes
+        if sys.platform == "win32":
+            try: ctypes.windll.dwmapi.DwmSetWindowAttribute(int(self.winId()), 20, ctypes.byref(ctypes.c_int(1)), 4)
+            except: pass
+
+    def confirm(self):
+        item = self.list_widget.currentItem()
+        if item:
+            self.asset_selected.emit(item.text(), item.data(Qt.UserRole))
+            self.close()
+        else:
+            QMessageBox.warning(self, "No Selection", "Please select a file to download.")

@@ -9,11 +9,14 @@ def resolve_local_rom_path(game: dict, config_data: dict) -> Optional[Path]:
     Robustly find a ROM on disk using multiple strategies:
     1. Check base_rom_path / platform / filename
     2. Check base_rom_path / filename
-    3. Recursive search in base_rom_path (last resort)
-    4. Windows-specific: base_games_dir / folder_name (from filename stem)
+    3. Fuzzy extension matching (.chd, .iso, .z64, etc)
+    4. PS3/Folder-based fallback: base_rom_path / platform / folder_name
+    5. Recursive search in base_rom_path (last resort)
+    6. Windows-specific: base_games_dir / folder_name (from filename stem)
     """
     from pathlib import Path
     import os
+    import re
     
     platform = game.get('platform_slug')
     rom_name = game.get('fs_name')
@@ -40,24 +43,60 @@ def resolve_local_rom_path(game: dict, config_data: dict) -> Optional[Path]:
         return None
     
     base_path = Path(base_rom)
+    stem = Path(rom_name).stem
     
-    # 1. Base / Platform / Filename
+    # Exclusion list: .cue files are often metadata and not what we want to launch/hash
+    excluded_exts = {'.cue'}
+
+    def is_excluded(p: Path) -> bool:
+        return p.suffix.lower() in excluded_exts
+
+    # 1. Base / Platform / Filename (Exact)
     if platform:
         p1 = base_path / platform / rom_name
-        if p1.exists():
+        if p1.exists() and not is_excluded(p1):
             return p1
             
-    # 2. Base / Filename
+    # 2. Base / Filename (Exact)
     p2 = base_path / rom_name
-    if p2.exists():
+    if p2.exists() and not is_excluded(p2):
         return p2
+
+    # 3. Fuzzy extension matching fallbacks
+    # Common disc and ROM formats: .chd, .iso, .cso, .pbp, .bin, .img, .mdf, .z64, .n64, .v64
+    extensions = ['.chd', '.iso', '.cso', '.pbp', '.bin', '.img', '.mdf', '.z64', '.n64', '.v64']
+    for ext in extensions:
+        if ext in excluded_exts: continue
+        candidate = stem + ext
+        if platform:
+            p_cand = base_path / platform / candidate
+            if p_cand.exists(): return p_cand
+        p_cand = base_path / candidate
+        if p_cand.exists(): return p_cand
+
+    # 4. PS3/Folder-based fallback (e.g. RPCS3 games stored as folders)
+    if platform:
+        p_folder = base_path / platform / stem
+        if p_folder.exists() and p_folder.is_dir():
+            return p_folder
         
-    # 3. Recursive Search (v0.5.7 legacy fallback)
+    # 5. Recursive Search (v0.5.7 legacy fallback)
     # Only do this if base_rom is a valid directory to avoid hangs
     if base_path.is_dir():
+        # Build set of all candidate names including original
+        all_candidates = {rom_name} | {stem + ext for ext in extensions} | {stem}
+        
         for root, dirs, files in os.walk(base_rom):
-            if rom_name in files:
-                return Path(root) / rom_name
+            # Check files first
+            for f in files:
+                if f in all_candidates:
+                    p_res = Path(root) / f
+                    if not is_excluded(p_res):
+                        return p_res
+            # Check directories (for folder-based fallbacks like PS3)
+            for d in dirs:
+                if d == stem:
+                    return Path(root) / d
                 
     return None
 

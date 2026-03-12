@@ -64,6 +64,38 @@ class SaveStrategy(ABC):
         """
         return None
 
+    def _backup_save(self, path: Path):
+        """Implement a rotation scheme capped at 3 versions for files or folders."""
+        if not path or not path.exists():
+            return
+
+        import shutil
+        bak  = Path(str(path) + ".bak")
+        bak1 = Path(str(path) + ".bak1")
+        bak2 = Path(str(path) + ".bak2")
+
+        try:
+            # 1. Rotate backups
+            if bak2.exists():
+                if bak2.is_dir(): shutil.rmtree(bak2)
+                else: bak2.unlink()
+            
+            if bak1.exists():
+                bak1.rename(bak2)
+            
+            if bak.exists():
+                bak.rename(bak1)
+
+            # 2. Copy current to .bak
+            if path.is_dir():
+                shutil.copytree(path, bak, dirs_exist_ok=True)
+            else:
+                shutil.copy2(path, bak)
+            
+            logging.info(f"[Strategy] Backup created for {path.name}")
+        except Exception as e:
+            logging.error(f"[Strategy] Backup failed for {path.name}: {e}")
+
     def _get_rom_stem(self, rom: dict) -> str:
         """Try different possible keys to find the ROM filename stem."""
         for key in ("file_name", "fs_name", "rom_path", "path"):
@@ -250,11 +282,24 @@ class RetroArchStrategy(SaveStrategy):
             platform_slug = rom.get("platform_slug", "")
             if platform_slug in ("psp", "playstation-portable"):
                 dest = dest.with_name(f"{rom_stem}.state.auto")
+            
+            # Backup state file
+            self._backup_save(dest)
         else:
             # Save file (.srm, .sav, or PSP SAVEDATA folder content)
             dest_dir = save_dir or self._get_retroarch_save_dir()
             if not dest_dir: return False
             
+            # SPECIAL CASE: PSP (Folder-based SAVEDATA)
+            platform_slug = rom.get("platform_slug", "")
+            if platform_slug in ("psp", "playstation-portable"):
+                # For PSP, filename might be content inside a specific GameID folder.
+                # However, RomM currently zips the folder. 
+                # If we are restoring individual files, we backup the destination first.
+                self._backup_save(dest_dir / filename)
+            else:
+                self._backup_save(dest_dir / (filename if filename.endswith((".srm", ".sav")) else f"{rom_stem}.srm"))
+
             dest_name = filename if filename.endswith((".srm", ".sav")) else f"{rom_stem}.srm"
             dest = dest_dir / dest_name
 
@@ -369,6 +414,7 @@ class SwitchStrategy(SaveStrategy):
     def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
         base = self._base_dir(rom)
         if not base: return False
+        self._backup_save(base)
         base.mkdir(parents=True, exist_ok=True)
         (base / filename).write_bytes(save_data)
         return True
@@ -461,6 +507,7 @@ class PS3Strategy(SaveStrategy):
     def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
         base = self._base_dir(rom)
         if not base: return False
+        self._backup_save(base)
         base.mkdir(parents=True, exist_ok=True)
         (base / filename).write_bytes(save_data)
         return True
@@ -510,6 +557,7 @@ class CemuStrategy(SaveStrategy):
     def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
         base = self._base_dir(rom)
         if not base: return False
+        self._backup_save(base)
         base.mkdir(parents=True, exist_ok=True)
         (base / filename).write_bytes(save_data)
         return True
@@ -563,13 +611,14 @@ class FolderStrategy(SaveStrategy):
         base = self._base_dir(rom)
         if not base or not base.exists():
             return []
-        return [p for p in base.rglob("*") if p.is_file()]
+        return [p for p in base.rglob("*") if p.is_file() and ".bak" not in p.name.lower()]
     
     def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
         base = self._base_dir(rom)
         if not base:
             return False
         
+        self._backup_save(base)
         base.mkdir(parents=True, exist_ok=True)
         dest = base / filename
         try:
@@ -621,6 +670,7 @@ class FileStrategy(SaveStrategy):
         if not p:
             return False
         
+        self._backup_save(p)
         p.parent.mkdir(parents=True, exist_ok=True)
         try:
             p.write_bytes(save_data)
@@ -656,7 +706,11 @@ class WindowsNativeStrategy(SaveStrategy):
         save_dir = windows_saves.get_save_dir(rom.get("id"))
         if not save_dir:
             return False
-        dest = Path(save_dir) / filename
+        
+        dest_dir = Path(save_dir)
+        self._backup_save(dest_dir)
+        
+        dest = dest_dir / filename
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
             dest.write_bytes(save_data)
@@ -690,12 +744,22 @@ def get_strategy(config: dict, emulator: dict) -> SaveStrategy:
     Return the correct SaveStrategy for an emulator.
     """
     mode = emulator.get("save_resolution", {}).get("mode", "retroarch")
-    if emulator.get("id") == "windows_native" or emulator.get("is_native"):
+    emu_id = emulator.get("id", "")
+
+    if emu_id == "windows_native" or emulator.get("is_native"):
         mode = "windows"
+
+    # Map specialized emulators to their strategies by ID if mode is generic
+    # This ensures specialized Title ID logic is used for PS3, Switch, Dolphin, etc.
+    if mode in ("folder", "file", "retroarch"):
+        # Explicit mapping for IDs that differ from registry keys
+        if emu_id == "eden": mode = "switch"
+        elif emu_id == "rpcs3": mode = "ps3"
+        elif emu_id in STRATEGY_REGISTRY and emu_id not in ("folder", "file", "retroarch"):
+            mode = emu_id
 
     # Emulators configured as 'file' but with no path should use folder auto-detection
     if mode in ("file", "direct_file"):
-        emu_id = emulator.get("id", "")
         path = emulator.get("save_resolution", {}).get("path", "")
         if not path and emu_id in _EMU_SAVE_HINTS:
             mode = "folder"

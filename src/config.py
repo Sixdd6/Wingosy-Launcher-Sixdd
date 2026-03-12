@@ -56,6 +56,7 @@ class ConfigManager:
         "windows_conflict_behavior": "ask",
         "conflict_behavior": "ask",
         "sync_interval_seconds": 120,
+        "max_save_versions": 5,
         "pcgamingwiki_enabled": True,
         "controller_type": "xinput",
         "base_rom_path": str(Path.home() / "Games" / "ROMs"),
