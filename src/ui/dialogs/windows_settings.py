@@ -1,8 +1,9 @@
 import os
 from pathlib import Path
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QFileDialog)
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QFileDialog, QDialog, QScrollArea)
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from src import windows_saves
+from src.pcgamingwiki import fetch_save_locations
 
 EXCLUDED_EXES = [
     "unins000.exe", "uninstall.exe", "setup.exe",
@@ -14,15 +15,68 @@ EXCLUDED_EXES = [
     "dx_setup", "redist"
 ]
 
+class WikiSearchThread(QThread):
+    finished = Signal(list)
+    def __init__(self, title, games_dir):
+        super().__init__()
+        self.title = title
+        self.games_dir = games_dir
+    def run(self):
+        try:
+            res = fetch_save_locations(self.title, self.games_dir)
+            self.finished.emit(res)
+        except Exception:
+            self.finished.emit([])
+
+class WikiSuggestionDialog(QDialog):
+    path_selected = Signal(str)
+    def __init__(self, suggestions, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("PCGamingWiki Suggestions — Wingosy")
+        self.setFixedSize(500, 400)
+        self.setStyleSheet("background-color: #1a1a1a; color: white;")
+        
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("<b>Found these potential save locations:</b>"))
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background: #2b2b2b; border: 1px solid #444;")
+        
+        container = QWidget()
+        scroll_layout = QVBoxLayout(container)
+        
+        for s in suggestions:
+            btn = QPushButton()
+            indicator = " ✅" if s['exists'] else " (not found)"
+            btn.setText(f"{s['path_type']}:\n{s['expanded_path']}{indicator}")
+            btn.setStyleSheet("""
+                QPushButton { 
+                    text-align: left; padding: 10px; background: #333; border: 1px solid #555; margin-bottom: 5px; 
+                }
+                QPushButton:hover { background: #444; }
+            """)
+            btn.clicked.connect(lambda checked=False, p=s['expanded_path']: (self.path_selected.emit(p), self.accept()))
+            scroll_layout.addWidget(btn)
+        
+        scroll_layout.addStretch()
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
+        
+        close_btn = QPushButton("Cancel")
+        close_btn.clicked.connect(self.reject)
+        layout.addWidget(close_btn)
+
 class WindowsGameSettingsDialog(QWidget):
     def __init__(self, game, config, main_window, parent=None):
         super().__init__(main_window)
         self.game = game
         self.config = config
         self.main_window = main_window
+        self.wiki_thread = None
         
         self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint | Qt.WindowTitleHint)
-        self.setFixedSize(550, 400)
+        self.setFixedSize(550, 450)
         self.setWindowTitle(f"Game Settings — {game.get('name')} — Wingosy")
         
         self.setStyleSheet("""
@@ -35,6 +89,7 @@ class WindowsGameSettingsDialog(QWidget):
             }
             QPushButton {
                 border-radius: 4px;
+                padding: 6px 12px;
             }
         """)
 
@@ -65,12 +120,18 @@ class WindowsGameSettingsDialog(QWidget):
         layout.addWidget(QLabel("<h3>Save Directory</h3><p>Where does this game store its saves?</p>"))
         self.save_status = QLabel()
         self.save_status.setStyleSheet("color: #aaa; background: transparent;")
+        self.save_status.setWordWrap(True)
         layout.addWidget(self.save_status)
         
         sb = QHBoxLayout()
         mb = QPushButton("📁 Browse Manually")
         mb.clicked.connect(self.browse_save_dir)
         sb.addWidget(mb)
+        
+        self.wiki_btn = QPushButton("🌐 PCGamingWiki")
+        self.wiki_btn.clicked.connect(self.search_pcgamingwiki)
+        sb.addWidget(self.wiki_btn)
+        
         layout.addLayout(sb)
         
         self.sync_status = QLabel()
@@ -128,7 +189,7 @@ class WindowsGameSettingsDialog(QWidget):
         if not rom or not win_dir: return
         folder = Path(win_dir) / Path(rom).stem
         if not folder.exists(): return
-        exes = [str(p) for p in folder.rglob("*.exe") if not any(ex.lower() in str(p).lower() for e in EXCLUDED_EXES)]
+        exes = [str(p) for p in folder.rglob("*.exe") if not any(e.lower() in str(p).lower() for e in EXCLUDED_EXES)]
         if not exes:
             QMessageBox.information(self, "No EXEs — Wingosy", "None found.")
             return
@@ -151,6 +212,30 @@ class WindowsGameSettingsDialog(QWidget):
         if directory:
             self.save_dir = directory
             self.update_ui()
+
+    def search_pcgamingwiki(self):
+        self.wiki_btn.setEnabled(False)
+        self.save_status.setText("🔍 Searching PCGamingWiki...")
+        
+        self.wiki_thread = WikiSearchThread(self.game.get('name'), self.config.get('windows_games_dir', ''))
+        self.wiki_thread.finished.connect(self._on_wiki_finished)
+        self.wiki_thread.start()
+
+    def _on_wiki_finished(self, suggestions):
+        self.wiki_btn.setEnabled(True)
+        self.update_ui()
+        
+        if not suggestions:
+            QMessageBox.information(self, "No Results — Wingosy", "No save locations found on PCGamingWiki.")
+            return
+            
+        dlg = WikiSuggestionDialog(suggestions, self)
+        dlg.path_selected.connect(self._on_wiki_path_selected)
+        dlg.exec()
+
+    def _on_wiki_path_selected(self, path):
+        self.save_dir = path
+        self.update_ui()
             
     def save_and_close(self):
         windows_saves.set_windows_save(self.game['id'], self.game['name'], self.save_dir, self.default_exe)

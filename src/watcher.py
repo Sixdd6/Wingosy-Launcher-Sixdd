@@ -293,7 +293,8 @@ class WingosyWatcher(QThread):
             all_emus = emulators.load_emulators()
             this_emu = next((e for e in all_emus if e["name"] == emu_display_name or e["id"] == emu_display_name), None)
             
-            if not this_emu and (windows_save_dir or game_data.get("platform_slug") == "windows"):
+            WINDOWS_PLATFORM_SLUGS = ["windows", "win", "pc", "pc-windows", "windows-games", "win95", "win98"]
+            if not this_emu and (windows_save_dir or game_data.get("platform_slug") in WINDOWS_PLATFORM_SLUGS):
                 this_emu = {"id": "windows_native", "is_native": True, "name": "Windows (Native)"}
 
             if not this_emu:

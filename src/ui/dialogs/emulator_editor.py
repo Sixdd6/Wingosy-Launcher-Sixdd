@@ -1,9 +1,11 @@
 import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QListWidget, QListWidgetItem, QMessageBox)
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from src.ui.widgets import format_size
 
 class ExePickerDialog(QWidget):
+    exe_selected = Signal(str)
+
     def __init__(self, exes, game_name, parent=None):
         super().__init__(parent)
         
@@ -97,14 +99,7 @@ class ExePickerDialog(QWidget):
     def accept_selection(self):
         if self.list_widget.currentItem():
             self.selected_exe = self.list_widget.currentItem().data(Qt.UserRole)
-            # Find GameDetailDialog parent if possible to call play_game
-            p = self.parent()
-            while p:
-                if hasattr(p, 'play_game') and hasattr(p, 'default_exe'):
-                    p.default_exe = self.selected_exe
-                    p.play_game()
-                    break
-                p = p.parent()
+            self.exe_selected.emit(self.selected_exe)
             self.close()
         else:
             QMessageBox.warning(self, "No Selection — Wingosy", "Please select an executable.")

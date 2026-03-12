@@ -5,6 +5,8 @@ from PySide6.QtCore import Qt, Signal, QThread, QTimer
 from PySide6.QtGui import QFontMetrics
 
 class ConflictDialog(QDialog):
+    choice_made = Signal(str)
+
     def __init__(self, title, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Save Conflict — {title} — Wingosy")
@@ -60,6 +62,7 @@ class ConflictDialog(QDialog):
         
     def finish(self, mode):
         self.result_mode = mode
+        self.choice_made.emit(mode)
         self.accept()
 
 class WikiSuggestionsDialog(QWidget):

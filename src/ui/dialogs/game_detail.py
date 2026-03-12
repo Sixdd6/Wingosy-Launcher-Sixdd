@@ -587,26 +587,101 @@ class GameDetailPanel(QWidget):
         self._reconnect_active_download()
 
     def _do_blocking_pull(self, rom, emulator):
-        """Pull latest save from RomM before launching the game."""
+        """Pull latest save from RomM before launching. Returns False to abort launch."""
         try:
             if not self.config.get("auto_pull_saves", True):
                 return True
-            
+
             strategy = get_strategy(self.config, emulator)
             save_dir = strategy.get_save_dir(rom)
-            
+
             latest = self.client.get_latest_save(rom['id'])
             if not latest:
                 return True
-            
+
             is_folder = (strategy.mode_id in ["folder", "windows"])
-            local_path = str(save_dir) if save_dir else str(strategy.get_save_files(rom)[0]) if strategy.get_save_files(rom) else None
-            
+            local_path = str(save_dir) if save_dir else (
+                str(strategy.get_save_files(rom)[0]) if strategy.get_save_files(rom) else None
+            )
+
             if not local_path:
                 return True
 
-            return self._apply_save_blocking(rom['id'], rom['name'], latest, local_path, "save", is_folder) is not False
-        
+            # Check if a conflict will be triggered: local exists + hashes differ
+            import zipfile
+            from src.utils import calculate_zip_content_hash, calculate_file_hash, calculate_folder_hash
+            import tempfile
+
+            watcher = self.main_window.watcher
+            server_updated_at = latest.get('updated_at', '')
+            cached_val = watcher.sync_cache.get(str(rom['id']), {})
+            cached_ts = cached_val.get('save_updated_at', '') if isinstance(cached_val, dict) else ""
+
+            # If cache matches server, no conflict possible
+            if cached_ts == server_updated_at and os.path.exists(local_path):
+                return True
+
+            local_exists = os.path.isdir(local_path) if is_folder else os.path.exists(local_path)
+            if not local_exists:
+                # No local save — safe to pull normally
+                return self._apply_save_blocking(
+                    rom['id'], rom['name'], latest, local_path, "save", is_folder
+                ) is not False
+
+            # Local exists — download cloud save to temp and compare hashes
+            tmp = tempfile.mktemp(suffix=".save")
+            if not watcher.client.download_save(latest, tmp):
+                return True
+
+            try:
+                remote_h = calculate_zip_content_hash(tmp) if zipfile.is_zipfile(tmp) else calculate_file_hash(tmp)
+                local_h = calculate_folder_hash(local_path) if is_folder else calculate_file_hash(local_path)
+
+                if remote_h == local_h:
+                    # Identical — update cache and proceed
+                    watcher.sync_cache[str(rom['id'])] = {"save_updated_at": server_updated_at}
+                    watcher.save_cache()
+                    return True
+
+                # Hashes differ — show conflict dialog and BLOCK launch until resolved
+                from src.ui.dialogs.save_sync import ConflictDialog
+                from PySide6.QtCore import QEventLoop
+
+                result = {"choice": None}
+                loop = QEventLoop()
+
+                def on_conflict_resolved(choice):
+                    result["choice"] = choice
+                    loop.quit()
+
+                dlg = ConflictDialog(rom['name'], self)
+                dlg.choice_made.connect(on_conflict_resolved)
+                dlg.show()
+                loop.exec()  # Block here until user picks
+
+                choice = result["choice"]
+                if choice == "cloud":
+                    return self._apply_save_blocking(
+                        rom['id'], rom['name'], latest, local_path, "save", is_folder
+                    ) is not False
+                elif choice == "local":
+                    return True  # Keep local, proceed to launch
+                elif choice == "both":
+                    # Backup cloud to .cloud_backup then proceed with local
+                    cloud_bak = str(local_path) + ".cloud_backup"
+                    if os.path.exists(cloud_bak):
+                        if os.path.isdir(cloud_bak): shutil.rmtree(cloud_bak, ignore_errors=True)
+                        else: os.remove(cloud_bak)
+                    shutil.copy2(tmp, cloud_bak) if not os.path.isdir(tmp) else shutil.copytree(tmp, cloud_bak)
+                    self.main_window.log(f"📁 Cloud save backed up to: {cloud_bak}")
+                    return True
+                else:
+                    return False  # User closed dialog — abort launch
+            finally:
+                if os.path.exists(tmp):
+                    try: os.remove(tmp) if not os.path.isdir(tmp) else shutil.rmtree(tmp, ignore_errors=True)
+                    except: pass
+
         except Exception as e:
             logging.warning(f"[Sync] Pull failed: {e}")
             return True
@@ -720,6 +795,7 @@ class GameDetailPanel(QWidget):
                             elif len(exes) > 1:
                                 from src.ui.dialogs.emulator_editor import ExePickerDialog
                                 picker = ExePickerDialog(exes, self.game.get("name"), self)
+                                picker.exe_selected.connect(self._launch_windows_exe)
                                 picker.show()
                                 # Keep reference
                                 self._child_dlg = picker
@@ -729,11 +805,7 @@ class GameDetailPanel(QWidget):
                     QMessageBox.warning(self, "Error — Wingosy", "No game executable found.")
                     return
 
-                self.main_window.log(f"🚀 Launching Windows Game: {os.path.basename(exe_to_launch)}")
-                proc = subprocess.Popen([exe_to_launch], cwd=os.path.dirname(exe_to_launch))
-                self._close()
-                if self.main_window.watcher:
-                    self.main_window.watcher.track_session(proc, emu_data["name"], self.game, exe_to_launch, exe_to_launch)
+                self._launch_windows_exe(exe_to_launch)
                 return
 
             if emu_data["id"] == "retroarch":
@@ -764,10 +836,18 @@ class GameDetailPanel(QWidget):
             proc = subprocess.Popen(args, env=clean_env, cwd=str(Path(exe_path).parent))
             self.main_window.log(f"🚀 Launched {emu_data['name']} (PID: {proc.pid})")
             if self.main_window.watcher:
-                QTimer.singleShot(0, lambda: self.main_window.watcher.track_session(proc, emu_data["name"], self.game, str(local_rom), exe_path))
+                QTimer.singleShot(0, lambda: self.main_window.watcher.track_session(proc, emu_data["name"], self.game, str(local_rom), exe_path, skip_pull=True))
             self._close()
         except Exception as e:
             QMessageBox.critical(self, "Error — Wingosy", str(e))
+
+    def _launch_windows_exe(self, exe_path):
+        self.main_window.log(f"🚀 Launching Windows Game: {os.path.basename(exe_path)}")
+        proc = subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
+        self._close()
+        if self.main_window.watcher:
+            self.main_window.watcher.track_session(proc, "Windows", self.game, exe_path, exe_path, skip_pull=True)
+
             
     def start_core_download(self, core_name, emu_dir, platform):
         from src.ui.threads import CoreDownloadThread
