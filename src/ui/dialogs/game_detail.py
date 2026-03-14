@@ -27,7 +27,9 @@ EXCLUDED_EXES = [
     "notification_helper.exe", "UnityCrashHandler",
     "dotnet", "netfx", "oalinst.exe",
     "DXSETUP.exe", "installscript",
-    "dx_setup", "redist"
+    "dx_setup", "redist", "socialclub",
+    "epicportal", "launcher", "activation",
+    "touchup", "cleanup", "webhelper"
 ]
 
 def check_retroarch_autosave(ra_exe_path, platform_slug, parent, config=None):
@@ -628,6 +630,7 @@ class GameDetailPanel(QWidget):
 
         self.extract_thread.progress.connect(lambda d, t: download_registry.update_progress(self.game['id'], d, t))
         self.extract_thread.finished.connect(self._on_extraction_finished)
+        self.extract_thread.error.connect(lambda msg: QMessageBox.critical(self, "Extraction Error", msg))
 
         self.main_window.download_queue.add_download(self.game['name'], self.extract_thread, "extraction", self.game['id'])
         self.extract_thread.start()

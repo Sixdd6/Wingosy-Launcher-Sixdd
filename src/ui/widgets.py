@@ -150,6 +150,12 @@ class DownloadRow(QWidget):
 
     def on_registry_update(self, rom_id, rtype, current, total, speed=0):
         if rtype == "extraction":
+            if self.status_badge.text() != "Extracting":
+                self.status_badge.setText("Extracting")
+                self.row_type = "extraction"
+                self._update_badge_style("progress")
+                # Update progress bar color for extraction
+                self.pbar.setStyleSheet(self.pbar.styleSheet().replace("#0d6efd", "#e65100"))
             self._on_extraction_progress(current, total)
             return
 

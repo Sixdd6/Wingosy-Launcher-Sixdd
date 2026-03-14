@@ -248,6 +248,10 @@ class DummyRomMClient:
     def get_firmware(self):
         return []
 
+    def get_bios_files(self):
+        """Dummy implementation of get_bios_files."""
+        return self.get_firmware()
+
     def get_rom_details(self, rom_id):
         return {
             "id": rom_id,

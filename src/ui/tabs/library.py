@@ -257,7 +257,7 @@ class GameCard(QWidget):
             if w > 0 and h > 0:
                 self.img_label.setPixmap(
                     pixmap.scaled(w, h,
-                        Qt.KeepAspectRatioByExpanding,
+                        Qt.KeepAspectRatio,
                         Qt.SmoothTransformation)
                 )
         except RuntimeError:
@@ -646,15 +646,15 @@ class LibraryTab(QWidget):
                 g for g in self.main_window.all_games
                 if g.get("platform_slug") not in all_known
                 and (not text
-                     or text in g.get('name', '').lower()
-                     or text in g.get('fs_name', '').lower())
+                     or text in str(g.get('name', '')).lower()
+                     or text in str(g.get('fs_name', '')).lower())
             ]
         else:
             base_filtered = [
                 g for g in self.main_window.all_games
                 if (not text
-                    or text in g.get('name', '').lower()
-                    or text in g.get('fs_name', '').lower())
+                    or text in str(g.get('name', '')).lower()
+                    or text in str(g.get('fs_name', '')).lower())
                 and (platform == "All Platforms"
                      or g.get('platform_display_name') == platform
                      or g.get('platform_slug') == platform)
@@ -672,8 +672,8 @@ class LibraryTab(QWidget):
             else:
                 filtered.append(g)
 
-        # Always sort alphabetically by game name
-        filtered.sort(key=lambda g: g.get('name', '').lower())
+        # Always sort alphabetically by game name — handle potential None/empty names
+        filtered.sort(key=lambda g: str(g.get('name', '') or g.get('fs_name', '')).lower())
 
         platform_changed = (
             not hasattr(self, '_current_platform') or

@@ -1,9 +1,28 @@
 # Changelog
 
-## v0.6.3 (Planned)
+## v0.6.4 (Planned)
 - Auto-extraction of BIOS files from multi-file archives
 - BIOS download progress bars in manager UI
 - Dedicated BIOS management tab (independent of emulator list)
+
+## v0.6.3 (2026-03-14)
+### Added
+- Improved Library UI:
+    - Fixed alphabetical sorting across all batches (no more fragmented sorting when scrolling)
+    - Reliable "All Platforms" search (now checks both game names and filesystem names)
+    - Enhanced Game Cards: Scaled artwork better supports square cover art without clipping
+- Robust Download & Extraction:
+    - Download list now correctly transitions to "Extracting" status (no longer stuck on "Downloading")
+    - Windows games now show "Play" button immediately after extraction finishes
+    - Expanded executable detection for Windows games (better exclusion of setups/launchers)
+- Self-Updater Reliability:
+    - Refined Windows restart logic using detached processes to prevent update failures
+    - Added error reporting for extraction failures in the game detail panel
+
+### Fixed
+- Xenoblade Chronicles 2 and other 'X' games sorted incorrectly into 'S'
+- Search failing to find games when on "All Platforms" view
+- Extraction status not updating in the download queue UI
 
 ## v0.6.2 (2026-03-14)
 ### Added

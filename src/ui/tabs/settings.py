@@ -449,21 +449,19 @@ class SettingsTab(QWidget):
         if success:
             QMessageBox.information(self, "Done", "Update installed. Restarting...")
             exe = str(Path(sys.executable).resolve())
-            # Write a tiny batch file to restart — more reliable than
-            # inline cmd string which breaks with certain path characters
-            bat = Path(sys.executable).parent / "_wingosy_restart.bat"
-            bat.write_text(
-                f'@echo off\r\n'
-                f'timeout /t 2 >NUL\r\n'
-                f'start "" "{exe}"\r\n'
-                f'del "%~f0"\r\n',  # self-delete the batch file
-                encoding='utf-8'
-            )
-            subprocess.Popen(
-                ['cmd.exe', '/c', str(bat)],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                close_fds=True
-            )
+            
+            if sys.platform == "win32":
+                # Create a detached process that waits 2 seconds then starts the new exe
+                # This is more robust than a batch file for some antivirus/UAC setups
+                cmd = f'timeout /t 2 >NUL && start "" "{exe}"'
+                subprocess.Popen(
+                    ["cmd.exe", "/c", cmd],
+                    creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS,
+                    close_fds=True
+                )
+            else:
+                subprocess.Popen([exe], close_fds=True)
+                
             sys.exit(0)
         else:
             QMessageBox.critical(self, "Failed", msg)

@@ -21,6 +21,17 @@
 - Parallel library loading for large collections
 - Configurable sync interval and log level
 
+## What's New in v0.6.3 (2026-03-14)
+### Added
+- **Improved Library UI**:
+    - **Alphabetical Batch Sorting**: Fixed issues where games loaded later would break the sort order. Your library is now perfectly sorted A-Z regardless of batch size.
+    - **Reliable Global Search**: Searching "All Platforms" now correctly finds games by both their display name and internal filename.
+    - **Square Artwork Support**: Game cards now scale better for square artwork, ensuring your covers aren't clipped or misaligned.
+- **Robustness & Fixes**:
+    - **Extraction Status**: The download manager now clearly shows "Extracting" after a download finishes, and Windows games immediately show the "Play" button once done.
+    - **Resilient Self-Updater**: Refined the Windows restart logic to prevent "Access Denied" or hanging errors during the self-update process.
+    - **Enhanced EXE Detection**: Better filtering of installers, setups, and launchers when auto-detecting Windows game executables.
+
 ## What's New in v0.6.2 (2026-03-14)
 ### Added
 - **Overhauled BIOS/Firmware Manager**:
