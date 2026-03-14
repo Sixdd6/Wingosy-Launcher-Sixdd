@@ -68,6 +68,15 @@ EMULATOR_SOURCES = {
         },
         "exe_hint": "xemu.exe"
     },
+    "xenia_canary": {
+        "type": "github",
+        "repo": "xenia-canary/xenia-canary",
+        "asset_filters": {
+            "required": ["windows"],
+            "excluded": ["debugoptimized", "debug", "pdb"]
+        },
+        "exe_hint": "xenia_canary.exe"
+    },
     "xenia": {
         "type": "direct",
         "url": "https://github.com/xenia-project/release-builds-windows/releases/latest/download/xenia_master.zip",

@@ -116,16 +116,31 @@ DEFAULT_EMULATORS = [
         },
         "folder": "xemu",
         "user_defined": False,
+        "sync_enabled": False,
+        "conflict_behavior": "ask"
+    },
+    {
+        "id": "xenia_canary",
+        "name": "Xenia Canary (Xbox 360)",
+        "executable_path": "",
+        "launch_args": ["{rom_path}"],
+        "platform_slugs": ["xbox360", "xbla"],
+        "save_resolution": {
+            "mode": "folder",
+            "path": ""
+        },
+        "folder": "xenia_canary",
+        "user_defined": False,
         "sync_enabled": True,
         "conflict_behavior": "ask"
     },
     {
         "id": "xenia",
-        "name": "Xenia",
+        "name": "Xenia Stable (Xbox 360)",
         "executable_path": "",
         "launch_args": ["{rom_path}"],
         "url": "https://github.com/xenia-project/release-builds-windows/releases/latest/download/xenia_master.zip",
-        "platform_slugs": ["xbox360"],
+        "platform_slugs": ["xbox360", "xbla"],
         "save_resolution": {
             "mode": "folder",
             "path": ""
@@ -219,6 +234,21 @@ def load_emulators_raw():
                 if "conflict_behavior" not in e:
                     e["conflict_behavior"] = "ask"
                     changed = True
+                
+                # Migrate DuckStation to folder mode (v0.6.1)
+                if e.get("id") == "duckstation":
+                    res = e.get("save_resolution", {})
+                    if res.get("mode") == "file":
+                        res["mode"] = "folder"
+                        e["save_resolution"] = res
+                        changed = True
+                        logging.info("Migrated DuckStation to folder save mode")
+                
+                # Migrate Xenia to "Xenia Stable (Xbox 360)" (v0.6.1)
+                if e.get("id") == "xenia" and e.get("name") == "Xenia":
+                    e["name"] = "Xenia Stable (Xbox 360)"
+                    changed = True
+                    logging.info("Migrated Xenia to 'Xenia Stable (Xbox 360)'")
 
             # Merge any new defaults
             existing_ids = {e.get("id") for e in data["emulators"] if e.get("id")}

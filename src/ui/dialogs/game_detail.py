@@ -3,8 +3,9 @@ import shutil
 import subprocess
 import logging
 import zipfile
+import time
 from pathlib import Path
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QProgressBar, QScrollArea, QFileDialog, QApplication)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QProgressBar, QScrollArea, QFileDialog, QApplication, QDialog)
 from PySide6.QtCore import Qt, QTimer, Signal, QThread, QPoint
 from PySide6.QtGui import QPixmap
 
@@ -593,6 +594,7 @@ class GameDetailPanel(QWidget):
                 return True
 
             strategy = get_strategy(self.config, emulator)
+            strategy.set_session_context(start_time=time.time(), rom_path=str(self._local_rom_path) if self._local_rom_path else "")
             save_dir = strategy.get_save_dir(rom)
 
             latest = self.client.get_latest_save(rom['id'])
@@ -762,7 +764,22 @@ class GameDetailPanel(QWidget):
             
         if not emu_data:
             emu_data = next((e for e in all_emus if e["id"] == "retroarch"), None)
-            
+
+        # Warn if multiple emulators support this platform and none is explicitly assigned
+        if emu_data and not self.config.get("platform_assignments", {}).get(platform):
+            all_matching = [
+                e for e in all_emus
+                if platform in e.get("platform_slugs", [])
+                and e.get("executable_path")
+                and os.path.exists(e.get("executable_path", ""))
+            ]
+            if len(all_matching) > 1:
+                names = ", ".join(e["name"] for e in all_matching)
+                self.main_window.log(
+                    f"⚠️ Multiple emulators support {platform.upper()}: {names}. "
+                    f"Using {emu_data['name']}. Set a preferred emulator in Settings → Platform Assignments."
+                )
+
         if not emu_data or (not emu_data.get("is_native") and (not emu_data.get("executable_path") or not os.path.exists(emu_data["executable_path"]))):
             QMessageBox.warning(self, "Error — Wingosy", "No valid emulator configured.")
             return

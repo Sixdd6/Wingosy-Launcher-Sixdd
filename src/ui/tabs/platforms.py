@@ -37,6 +37,13 @@ class PlatformTab(QWidget):
         
         all_games = getattr(self.main_window, "all_games", [])
         platforms = sorted(list(set(g.get("platform_slug") for g in all_games if g.get("platform_slug"))))
+
+        if not platforms:
+            platforms = sorted([
+                "psx", "ps2", "ps3", "gc", "wii", "wiiu", "n64", "gba",
+                "nds", "snes", "nes", "switch", "nintendo-switch",
+                "3ds", "n3ds", "psp", "dreamcast", "saturn", "xbox", "xbox360"
+            ])
         
         all_emus = emulators.load_emulators()
         assignments = self.config.get("platform_assignments", {})

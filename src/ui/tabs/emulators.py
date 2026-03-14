@@ -512,6 +512,14 @@ class PlatformAssignWidget(QWidget):
             if item and item.widget(): item.widget().setParent(None)        
         all_games = getattr(self.main_window, "all_games", [])
         platforms = sorted(list(set(g.get("platform_slug") for g in all_games if g.get("platform_slug"))))
+
+        if not platforms:
+            platforms = sorted([
+                "psx", "ps2", "ps3", "gc", "wii", "wiiu", "n64", "gba",
+                "nds", "snes", "nes", "switch", "nintendo-switch",
+                "3ds", "n3ds", "psp", "dreamcast", "saturn", "xbox", "xbox360"
+            ])
+
         all_emus = emulators.load_emulators()
         assignments = self.config.get("platform_assignments", {})
         for slug in platforms:
@@ -574,11 +582,21 @@ class EmulatorsTab(QWidget):
         self.platform_assign = PlatformAssignWidget(main_window)
         self.sub_tabs.addTab(self.emu_list, "Emulators")
         self.sub_tabs.addTab(self.sync_settings, "Sync")
-        self.sub_tabs.addTab(self.platform_assign, "Platforms")        
+        self.sub_tabs.addTab(self.platform_assign, "Platforms")
+        self.sub_tabs.currentChanged.connect(self._on_tab_changed)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.sub_tabs)
+
+    def _on_tab_changed(self, index):
+        widget = self.sub_tabs.widget(index)
+        if hasattr(widget, 'populate_assignments'):
+            widget.populate_assignments()
+        elif hasattr(widget, 'populate_emus'):
+            widget.populate_emus()
+        elif hasattr(widget, 'populate_emu_sync'):
+            widget.populate_emu_sync()
 
     def populate_emus(self): self.emu_list.populate_emus()
     def refresh_all(self):

@@ -201,6 +201,9 @@ class WingosyWatcher(QThread):
                     self.sync_cache = json.load(f)
             except Exception as e:
                 logging.error(f"[Watcher] Cache load error: {e}")
+        
+        from src.save_strategies import set_watcher_ref
+        set_watcher_ref(self)
 
     def save_cache(self):
         try:
@@ -237,7 +240,10 @@ class WingosyWatcher(QThread):
     def _get_current_hash(self, strategy, rom):
         try:
             files = strategy.get_save_files(rom)
-            if not files: return None
+            logging.debug(f"[Hash] get_save_files returned: {files}")
+            if not files:
+                logging.warning(f"[Watcher] No save files found for {rom.get('name')} (emu: {self.active_sessions.get(os.getpid(), {}).get('emulator', {}).get('id', 'unknown') if hasattr(self, 'active_sessions') else 'unknown'})")
+                return None
             h = hashlib.md5()
             found = False
             for p in sorted(files):

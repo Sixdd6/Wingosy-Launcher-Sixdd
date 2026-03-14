@@ -19,6 +19,15 @@ from pathlib import Path
 from typing import Optional
 
 
+_watcher_ref = None  # set by watcher.py on init
+
+
+def set_watcher_ref(watcher):
+    """Sets the global watcher reference for strategies that need cache access."""
+    global _watcher_ref
+    _watcher_ref = watcher
+
+
 class SaveStrategy(ABC):
     """
     Base class for all save strategies.
@@ -361,7 +370,14 @@ class SwitchStrategy(SaveStrategy):
                     conn.close()
                 except Exception: pass
 
-        # 2. Try XCI Header parsing (offset 0x108)
+        # 2. Try to extract Title ID from ROM filename (common in scene dumps)
+        import re as _re
+        rom_filename = Path(self.rom_path).stem if self.rom_path else ""
+        tid_match = _re.search(r'\b(01[0-9A-Fa-f]{14})\b', rom_filename)
+        if tid_match:
+            return tid_match.group(1).upper()
+
+        # 3. Try XCI Header parsing (offset 0x108)
         rom_p = Path(self.rom_path)
         if rom_p.exists() and rom_p.suffix.lower() == ".xci":
             try:
@@ -372,18 +388,33 @@ class SwitchStrategy(SaveStrategy):
                         return tid
             except Exception: pass
 
-        # 3. Last resort: most recently modified 16-char folder
+        # 4. Last resort: find Title ID folder modified after session start
+        # Uses self.session_start_time set by set_session_context to avoid picking
+        # the wrong game when multiple Switch games have saves on disk.
+        session_start = getattr(self, 'session_start_time', 0)
         recent_tid, max_mtime = None, 0
         for root in search_roots:
             save_base = root / "nand/user/save/0000000000000000"
-            if not save_base.exists(): continue
+            if not save_base.exists():
+                continue
             for profile_dir in save_base.iterdir():
-                if not profile_dir.is_dir(): continue
+                if not profile_dir.is_dir():
+                    continue
                 for tid_dir in profile_dir.iterdir():
-                    if tid_dir.is_dir() and re.match(r'^01[0-9A-F]{14}$', tid_dir.name):
-                        if tid_dir.stat().st_mtime > max_mtime:
-                            max_mtime = tid_dir.stat().st_mtime
-                            recent_tid = tid_dir.name
+                    if not tid_dir.is_dir():
+                        continue
+                    if not re.match(r'^01[0-9A-Fa-f]{14}$', tid_dir.name):
+                        continue
+                    # Use most recent file mtime inside the folder, not the folder itself
+                    # Windows doesn't update folder mtime when child files change
+                    file_mtimes = [f.stat().st_mtime for f in tid_dir.rglob("*") if f.is_file()]
+                    mtime = max(file_mtimes) if file_mtimes else tid_dir.stat().st_mtime
+                    # Prefer folders touched after session started
+                    if session_start > 0 and mtime < session_start:
+                        continue
+                    if mtime > max_mtime:
+                        max_mtime = mtime
+                        recent_tid = tid_dir.name.upper()
         return recent_tid
 
     def _base_dir(self, rom: dict) -> Optional[Path]:
@@ -408,8 +439,10 @@ class SwitchStrategy(SaveStrategy):
 
     def get_save_files(self, rom: dict) -> list[Path]:
         base = self._base_dir(rom)
-        if not base or not base.exists(): return []
-        return [p for p in base.rglob("*") if p.is_file()]
+        if not base or not base.exists():
+            return []
+        return [base]  # Return the folder itself, not individual files inside
+        # PostSessionSyncThread handles folder uploads via the folder_files bucket
 
     def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
         base = self._base_dir(rom)
@@ -580,6 +613,18 @@ _EMU_SAVE_HINTS: dict[str, list] = {
                 lambda _: Path.home() / "AppData" / "Roaming" / "Cemu" / "mlc01" / "usr" / "save"],
     "azahar":  [lambda _: Path.home() / "AppData" / "Roaming" / "Azahar" / "user" / "sdmc",
                 lambda _: Path.home() / "AppData" / "Roaming" / "azahar" / "user" / "sdmc"],
+    "duckstation": [
+        # Primary: AppData\Local\DuckStation\memcards\ (modern installs)
+        lambda _: Path(os.path.expandvars(r'%LOCALAPPDATA%\DuckStation\memcards')),
+        # Fallback: Documents\DuckStation\memcards\ (old installs)
+        lambda _: Path.home() / "Documents" / "DuckStation" / "memcards",
+    ],
+    "melonds": [
+        lambda rom: Path(os.path.expandvars(r'%APPDATA%')) / "melonDS" / "saves" / f"{Path(rom.get('fs_name', '')).stem}.sav" if isinstance(rom, dict) and rom.get('fs_name') else Path(os.path.expandvars(r'%APPDATA%\melonDS')),
+        lambda rom: Path(os.path.expandvars(r'%USERPROFILE%')) / "Documents" / "melonDS" / "saves" / f"{Path(rom.get('fs_name', '')).stem}.sav" if isinstance(rom, dict) and rom.get('fs_name') else Path.home() / "Documents" / "melonDS",
+    ],
+    # xemu saves are stored inside xbox_hdd.qcow2 virtual disk image
+    # and cannot be synced as regular files. Save sync not supported.
 }
 
 
@@ -597,11 +642,19 @@ class FolderStrategy(SaveStrategy):
             return Path(save_dir)
         # Auto-detect based on emulator id
         emu_id = self.emulator.get("id", "")
+        # Note: some hints expect the emulator executable path (e.g. PCSX2),
+        # while others need the ROM dict to find game-specific files (e.g. MelonDS).
+        # We pass both for maximum flexibility.
         exe = self.emulator.get("executable_path", "")
         for hint in _EMU_SAVE_HINTS.get(emu_id, []):
             try:
-                p = hint(exe)
-                if p.exists():
+                # DuckStation/MelonDS need rom; RetroArch/PCSX2/etc need exe
+                # Most hints now handle both via type check
+                p = hint(rom)
+                if not p and not isinstance(rom, str):
+                    p = hint(exe)
+                
+                if p and p.exists():
                     return p
             except Exception:
                 continue
@@ -633,6 +686,160 @@ class FolderStrategy(SaveStrategy):
         return self._base_dir(rom)
 
 
+class DuckStationStrategy(SaveStrategy):
+    """
+    Handles DuckStation PS1 saves.
+    Returns the entire memcards folder so all .mcd files are zipped
+    and uploaded together, preserving all memory card slots.
+    """
+    mode_id = "duckstation"
+
+    def _memcards_dir(self) -> Optional[Path]:
+        res = self.emulator.get("save_resolution", {})
+        save_dir = res.get("path", "")
+        if save_dir and Path(save_dir).exists():
+            return Path(save_dir)
+        # Auto-detect
+        for hint in _EMU_SAVE_HINTS.get("duckstation", []):
+            try:
+                p = hint(None)
+                if p and p.exists():
+                    return p
+            except Exception:
+                continue
+        return None
+
+    def get_save_files(self, rom: dict) -> list[Path]:
+        d = self._memcards_dir()
+        if not d or not d.exists():
+            return []
+        return [d]  # Return folder itself — handled by folder_files bucket
+
+    def get_save_dir(self, rom: dict) -> Optional[Path]:
+        return self._memcards_dir()
+
+    def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
+        d = self._memcards_dir()
+        if not d:
+            return False
+        d.mkdir(parents=True, exist_ok=True)
+        try:
+            (d / filename).write_bytes(save_data)
+            return True
+        except Exception as e:
+            logging.error(f"[DuckStationStrategy] Restore failed: {e}")
+            return False
+
+
+class XeniaStrategy(SaveStrategy):
+    r"""
+    Handles Xenia/Xenia Canary saves.
+    Supports both portable mode (content\ next to exe) and
+    Documents\xenia\content\ default mode.
+    Syncs the entire game-specific title folder including headers.
+    """
+    mode_id = "xenia"
+
+    def _get_watcher(self):
+        """Returns the global watcher reference set on startup."""
+        return _watcher_ref
+
+    def _get_cached_title_dir(self, rom: dict) -> Optional[Path]:
+        """Return the last known title dir path stored after a successful sync."""
+        try:
+            watcher = self._get_watcher()
+            if not watcher:
+                return None
+            rom_id = str(rom.get('id', ''))
+            cache = watcher.sync_cache.get(rom_id, {})
+            if isinstance(cache, dict):
+                cached_path = cache.get('xenia_title_dir')
+                if cached_path:
+                    return Path(cached_path)
+        except Exception:
+            pass
+        return None
+
+    def _content_dir(self) -> Optional[Path]:
+        # 1. Portable: content\ next to the executable
+        exe = self.emulator.get("executable_path", "")
+        if exe:
+            portable = Path(exe).parent / "content"
+            if portable.exists():
+                return portable
+        # 2. Documents fallback
+        for candidate in [
+            Path.home() / "Documents" / "xenia-canary" / "content",
+            Path.home() / "Documents" / "xenia" / "content",
+        ]:
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _game_dir(self, rom: dict) -> Optional[Path]:
+        """Find the most recently modified title ID folder after session start."""
+        content = self._content_dir()
+        if not content or not content.exists():
+            return self._get_cached_title_dir(rom)
+
+        session_start = getattr(self, 'session_start_time', 0)
+        best_dir, best_mtime = None, 0
+
+        for profile_dir in content.iterdir():
+            if not profile_dir.is_dir():
+                continue
+            for title_dir in profile_dir.iterdir():
+                if not title_dir.is_dir():
+                    continue
+                
+                # Skip Xbox Live system folders (FFFE*, etc)
+                # Real game title IDs typically start with 4 or 5
+                tid = title_dir.name.upper()
+                if tid.startswith("FFFE") or tid.startswith("0000"):
+                    continue
+
+                # Get max mtime of files inside recursively
+                file_mtimes = [
+                    f.stat().st_mtime
+                    for f in title_dir.rglob("*") if f.is_file()
+                ]
+                mtime = max(file_mtimes) if file_mtimes else 0
+                if session_start > 0 and mtime < session_start:
+                    continue
+                if mtime > best_mtime:
+                    best_mtime = mtime
+                    best_dir = title_dir
+        
+        return best_dir or self._get_cached_title_dir(rom)
+
+    def get_save_files(self, rom: dict) -> list[Path]:
+        d = self._game_dir(rom)
+        if not d:
+            return []
+        
+        # Cache the title dir path for future pulls when folder may not exist
+        try:
+            watcher = self._get_watcher()
+            if watcher:
+                rom_id = str(rom.get('id', ''))
+                if rom_id not in watcher.sync_cache:
+                    watcher.sync_cache[rom_id] = {}
+                if isinstance(watcher.sync_cache[rom_id], dict):
+                    watcher.sync_cache[rom_id]['xenia_title_dir'] = str(d)
+                    watcher.save_cache()
+        except Exception:
+            pass
+            
+        return [d]  # Return entire title folder (saves + headers)
+
+    def get_save_dir(self, rom: dict) -> Optional[Path]:
+        return self._game_dir(rom)
+
+    def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
+        # Restore is handled by extract_strip_root in watcher.py since we return the folder
+        return True
+
+
 class FileStrategy(SaveStrategy):
     """
     Handles emulators that use a single save file per ROM.
@@ -660,11 +867,22 @@ class FileStrategy(SaveStrategy):
         return base / f"{rom_stem}.sav"
     
     def get_save_files(self, rom: dict) -> list[Path]:
-        p = self._save_path(rom)
-        if p and p.exists():
-            return [p]
+        res = self.emulator.get("save_resolution", {})
+        save_path = res.get("path", "")
+        if save_path and Path(save_path).exists():
+            return [Path(save_path)]
+
+        # Auto-detect using hints (e.g. DuckStation .mcr, MelonDS .sav)
+        emu_id = self.emulator.get("id", "")
+        for hint in _EMU_SAVE_HINTS.get(emu_id, []):
+            try:
+                p = hint(rom)
+                if p and Path(p).exists():
+                    return [Path(p)]
+            except Exception:
+                continue
         return []
-    
+
     def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
         p = self._save_path(rom)
         if not p:
@@ -681,8 +899,8 @@ class FileStrategy(SaveStrategy):
             return False
     
     def get_save_dir(self, rom: dict) -> Optional[Path]:
-        p = self._save_path(rom)
-        return p.parent if p else None
+        files = self.get_save_files(rom)
+        return files[0].parent if files else None
 
 
 class WindowsNativeStrategy(SaveStrategy):
@@ -737,6 +955,8 @@ STRATEGY_REGISTRY: dict[str, type[SaveStrategy]] = {
     "dolphin": DolphinStrategy,
     "ps3": PS3Strategy,
     "cemu": CemuStrategy,
+    "duckstation": DuckStationStrategy,
+    "xenia": XeniaStrategy,
 }
 
 def get_strategy(config: dict, emulator: dict) -> SaveStrategy:
@@ -755,6 +975,8 @@ def get_strategy(config: dict, emulator: dict) -> SaveStrategy:
         # Explicit mapping for IDs that differ from registry keys
         if emu_id == "eden": mode = "switch"
         elif emu_id == "rpcs3": mode = "ps3"
+        elif emu_id == "duckstation": mode = "duckstation"
+        elif emu_id in ("xenia", "xenia_canary"): mode = "xenia"
         elif emu_id in STRATEGY_REGISTRY and emu_id not in ("folder", "file", "retroarch"):
             mode = emu_id
 

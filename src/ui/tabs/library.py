@@ -533,46 +533,13 @@ class LibraryTab(QWidget):
         self.status_label.setVisible(True)
 
     def append_batch(self, games):
-        """Append a batch of games to the grid without full re-render."""   
-        sync_cache = (self.main_window.watcher.sync_cache
-                      if self.main_window.watcher else {})
-
-        card_w, card_h, cols_per_row = self._get_card_size()
-
-        self.grid_widget.setUpdatesEnabled(False)
-        try:
-            total_so_far = len(self._all_cards)
-            row = total_so_far // cols_per_row
-            col = total_so_far % cols_per_row
-
-            # Determine if current filter allows these games
-            text = self.search_input.text().lower()
-            platform = self.platform_filter.currentText()
-
-            for game in games:
-                # Filter check
-                matches_search = not text or text in game.get('name', '').lower() or text in game.get('fs_name', '').lower()
-                matches_platform = (platform == "All Platforms"
-                                   or game.get('platform_display_name') == platform
-                                   or game.get('platform_slug') == platform)
-
-                if matches_search and matches_platform:
-                    card = GameCard(game, self.client, self.config, sync_cache)
-                    if game.get('_local_exists'):
-                        card.set_local_exists(True)
-                    card.clicked.connect(lambda g=game: self.open_detail(g))
-                    card.setFixedSize(card_w, card_h)
-                    card.img_label.setFixedSize(card_w - 10, card_h - 30)   
-                    card.title_label.setFixedWidth(card_w - 10)
-                    self.grid_layout.addWidget(card, row, col)
-                    self._all_cards.append(card)
-
-                    col += 1
-                    if col >= cols_per_row:
-                        col = 0
-                        row += 1
-        finally:
-            self.grid_widget.setUpdatesEnabled(True)
+        """Called when new games arrive from parallel server fetch.
+        Instead of appending to the end (which breaks alphabetical order),
+        trigger a full apply_filters re-render so all games are sorted correctly.
+        """
+        # Games are already added to main_window.all_games by the caller.
+        # Just re-render the full sorted view.
+        self.apply_filters()
 
     def _get_card_size(self):
         """Compute card width/height based on viewport width and cols setting."""
@@ -685,6 +652,9 @@ class LibraryTab(QWidget):
                 if not is_installed: filtered.append(g)
             else:
                 filtered.append(g)
+
+        # Always sort alphabetically by game name
+        filtered.sort(key=lambda g: g.get('name', '').lower())
 
         platform_changed = (
             not hasattr(self, '_current_platform') or
