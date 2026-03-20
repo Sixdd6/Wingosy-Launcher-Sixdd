@@ -166,10 +166,10 @@ class GameDetailPanel(QWidget):
         content_layout.setContentsMargins(24, 20, 24, 20)
         content_layout.setSpacing(10)
 
-        title_label = QLabel(game.get('name'))
-        title_label.setStyleSheet("font-size: 20pt; font-weight: bold; color: #1e88e5; background: transparent;")
-        title_label.setWordWrap(True)
-        content_layout.addWidget(title_label)
+        self.title_label = QLabel(game.get('name'))
+        self.title_label.setStyleSheet("font-size: 20pt; font-weight: bold; color: #1e88e5; background: transparent;")
+        self.title_label.setWordWrap(True)
+        content_layout.addWidget(self.title_label)
 
         sub_layout = QHBoxLayout()
         sub_layout.setSpacing(25)
@@ -204,15 +204,10 @@ class GameDetailPanel(QWidget):
         self.rating_label.setStyleSheet("font-size: 12pt; margin-bottom: 2px; background: transparent;")
         self.right_column.addWidget(self.rating_label)
 
-        self.developer_label = QLabel("<b>Developer:</b> Loading...")
-        self.developer_label.setWordWrap(True)
-        self.developer_label.setStyleSheet("font-size: 12pt; margin-bottom: 2px; background: transparent;")
-        self.right_column.addWidget(self.developer_label)
-
-        self.publisher_label = QLabel("<b>Publisher:</b> Loading...")
-        self.publisher_label.setWordWrap(True)
-        self.publisher_label.setStyleSheet("font-size: 12pt; margin-bottom: 2px; background: transparent;")
-        self.right_column.addWidget(self.publisher_label)
+        self.companies_label = QLabel("<b>Developer/Publisher:</b> Loading...")
+        self.companies_label.setWordWrap(True)
+        self.companies_label.setStyleSheet("font-size: 12pt; margin-bottom: 2px; background: transparent;")
+        self.right_column.addWidget(self.companies_label)
 
         self.players_label = QLabel("<b>Players:</b> Loading...")
         self.players_label.setStyleSheet("font-size: 12pt; margin-bottom: 2px; background: transparent;")
@@ -304,11 +299,9 @@ class GameDetailPanel(QWidget):
         self._reconnect_active_download()
         self.destroyed.connect(self._cleanup)
             
-        self._start_image_fetch()
-        self._start_desc_fetch()
-        self._start_metadata_fetch()
-
         self._cover_full_pixmap = None
+        self._start_image_fetch()
+        self._start_metadata_fetch()
 
     def _cleanup(self):
         rom_id = str(self.game["id"])
@@ -469,49 +462,9 @@ class GameDetailPanel(QWidget):
             return
 
         rom_name = self.game.get('name', 'this game')
-        if entry["type"] == "extraction":
-            reply = QMessageBox.question(
-                self, "Cancel Extraction — Wingosy",
-                f"Cancel extracting {rom_name}?\n\nWhat should happen to the files extracted so far?",
-                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-                QMessageBox.Cancel
-            )
-            if reply == QMessageBox.Cancel: return
-            
-            # 1. Request interruption
-            entry["thread"].cancel()
-            if reply == QMessageBox.Discard:
-                def on_cancelled(path):
-                    import shutil
-                    shutil.rmtree(path, ignore_errors=True)
-                entry["thread"].cancelled.connect(on_cancelled)
-        else:
-            reply = QMessageBox.question(
-                self, "Cancel Download — Wingosy",
-                f"Cancel downloading {rom_name}?",
-                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-                QMessageBox.Cancel
-            )
-            if reply == QMessageBox.Cancel: return
-            
-            # 1. Request interruption
-            entry["thread"].cancel()
-            if reply == QMessageBox.Discard:
-                def on_cancelled_dl():
-                    p = getattr(entry["thread"], 'file_path', None)
-                    if p and os.path.exists(p):
-                        # Wait for thread to release file handle then delete
-                        for _ in range(10):  # retry up to 1 second
-                            try:
-                                os.remove(p)
-                                break
-                            except PermissionError:
-                                import time
-                                time.sleep(0.1)
-                            except Exception:
-                                break
-                    self._update_button_states()
-                entry["thread"].cancelled.connect(on_cancelled_dl)
+
+        # Immediately cancel without prompting
+        entry["thread"].cancel()
 
         self.game['_local_exists'] = False # Reset state immediately
         # 2. Update status in registry (thread will handle unregistering)
@@ -626,7 +579,7 @@ class GameDetailPanel(QWidget):
 
         def _safe_apply(rom):
             try:
-                self._apply_rom_metadata(rom or {})
+                self._apply_resolved_metadata(rom or {})
             except RuntimeError:
                 pass
 
@@ -638,71 +591,189 @@ class GameDetailPanel(QWidget):
         self.main_window.active_threads.append(self._rom_details_thread)
         self._rom_details_thread.start()
 
-    def _apply_rom_metadata(self, rom):
+    def _resolve_rom_metadata(self, rom):
         md = {}
         try:
             igdb = rom.get("igdb_metadata") or {}
             moby = rom.get("moby_metadata") or {}
             ss = rom.get("ss_metadata") or {}
+            lb = (
+                rom.get("launchbox_metadata") or rom.get("launchbox") or
+                rom.get("lb_metadata") or rom.get("lb") or
+                rom.get("launchbox_game") or {}
+            )
             if isinstance(igdb, dict):
                 md.update(igdb)
             if isinstance(moby, dict):
                 md.update(moby)
             if isinstance(ss, dict):
                 md.update(ss)
+            # LaunchBox should be lowest-priority fallback
+            if isinstance(lb, dict):
+                for k, v in lb.items():
+                    if k not in md or md.get(k) in (None, "", [], {}):
+                        md[k] = v
         except Exception:
             md = {}
+
+        title = rom.get("name") or rom.get("title") or md.get("name") or md.get("title")
+        summary = (
+            rom.get("summary") or rom.get("description") or
+            md.get("summary") or md.get("description")
+        )
 
         release = (
             rom.get("release_date") or rom.get("released") or rom.get("first_release_date") or
             md.get("release_date") or md.get("released") or md.get("first_release_date")
         )
-        release_text = self._format_release_date(release)
-
         genres_val = (
             rom.get("genres") or md.get("genres") or
             rom.get("genre") or md.get("genre")
         )
-        genres_text = self._format_listish(genres_val)
+        # LaunchBox sometimes includes genres like "Adventure;"
+        try:
+            if isinstance(genres_val, (list, tuple)):
+                cleaned = []
+                for g in genres_val:
+                    if isinstance(g, str):
+                        s = g.strip().rstrip(";").strip()
+                        if s:
+                            cleaned.append(s)
+                    else:
+                        cleaned.append(g)
+                genres_val = cleaned
+            elif isinstance(genres_val, str):
+                genres_val = genres_val.strip().rstrip(";").strip()
+        except Exception:
+            pass
 
         rating_val = (
-            rom.get("rating") or rom.get("aggregated_rating") or
-            md.get("rating") or md.get("aggregated_rating")
+            rom.get("total_rating") or md.get("total_rating") or
+            rom.get("rating") or md.get("rating") or
+            rom.get("aggregated_rating") or md.get("aggregated_rating")
         )
-        rating_text = self._format_rating_stars(rating_val)
+        if rating_val in (None, "", 0, 0.0):
+            rating_val = rom.get("community_rating") or md.get("community_rating")
 
         dev_val = (
             rom.get("developer") or rom.get("developers") or
-            md.get("developer") or md.get("developers")
+            md.get("developer") or md.get("developers") or
+            rom.get("companies") or md.get("companies")
         )
         pub_val = (
             rom.get("publisher") or rom.get("publishers") or
             md.get("publisher") or md.get("publishers")
         )
-        dev_text = self._format_listish(dev_val)
-        pub_text = self._format_listish(pub_val)
 
         players_val = (
-            rom.get("players") or rom.get("num_players") or rom.get("max_players") or
-            md.get("players") or md.get("num_players") or md.get("max_players")
+            rom.get("players") or rom.get("num_players") or rom.get("max_players") or rom.get("player_count") or
+            md.get("players") or md.get("num_players") or md.get("max_players") or md.get("player_count")
         )
-        players_text = self._format_players(players_val)
-
+        if not players_val:
+            players_val = rom.get("max_players") or md.get("max_players")
         playtime_val = (
             rom.get("playtime_seconds") or rom.get("playtime") or rom.get("play_time") or
             md.get("playtime_seconds") or md.get("playtime") or md.get("play_time")
         )
         if not playtime_val:
             playtime_val = self._get_cached_playtime_seconds(self.game.get("id"))
-        playtime_text = self._format_playtime(playtime_val)
+
+        # Some backends return "0"/"0.0" strings for missing ratings.
+        try:
+            if rating_val is not None and str(rating_val).strip() in ("0", "0.0", "0.00"):
+                rating_val = None
+        except Exception:
+            pass
+
+        # Cover URL fallback: LaunchBox provides a list of images
+        cover_url = None
+        try:
+            imgs = md.get("images") or rom.get("images")
+            if isinstance(imgs, list):
+                preferred_types = [
+                    "Box - Front",
+                    "Box - 3D",
+                    "Banner",
+                    "Poster",
+                    "Clear Logo",
+                    "Screenshot - Gameplay",
+                ]
+                best = None
+                for pref in preferred_types:
+                    best = next((i for i in imgs if isinstance(i, dict) and (i.get("type") == pref) and i.get("url")), None)
+                    if best:
+                        break
+                if not best:
+                    best = next((i for i in imgs if isinstance(i, dict) and i.get("url")), None)
+                if best:
+                    cover_url = best.get("url")
+        except Exception:
+            cover_url = None
+
+        return {
+            "title": title,
+            "summary": summary,
+            "release": release,
+            "genres": genres_val,
+            "rating": rating_val,
+            "developer": dev_val,
+            "publisher": pub_val,
+            "players": players_val,
+            "playtime": playtime_val,
+            "cover_url": cover_url,
+        }
+
+    def _apply_resolved_metadata(self, rom):
+        resolved = self._resolve_rom_metadata(rom or {})
+
+        try:
+            title = resolved.get("title")
+            if title and isinstance(title, str) and title.strip():
+                self.title_label.setText(title)
+                self.game["name"] = title
+        except Exception:
+            pass
+
+        release_text = self._format_release_date(resolved.get("release"))
+        genres_text = self._format_listish(resolved.get("genres"))
+        rating_text = self._format_rating_stars(resolved.get("rating"))
+        companies_text = self._format_listish(resolved.get("developer"))
+        players_text = self._format_players(resolved.get("players"))
+        playtime_text = self._format_playtime(resolved.get("playtime"))
 
         self.release_label.setText(f"<b>Release:</b> {release_text}")
         self.genres_label.setText(f"<b>Genres:</b> {genres_text}")
         self.rating_label.setText(f"<b>Rating:</b> {rating_text}")
-        self.developer_label.setText(f"<b>Developer:</b> {dev_text}")
-        self.publisher_label.setText(f"<b>Publisher:</b> {pub_text}")
+        self.companies_label.setText(f"<b>Developer/Publisher:</b> {companies_text}")
         self.players_label.setText(f"<b>Players:</b> {players_text}")
         self.playtime_label.setText(f"<b>Playtime:</b> {playtime_text}")
+
+        try:
+            summary = resolved.get("summary")
+            if summary and isinstance(summary, str) and summary.strip():
+                self.desc_label.setText(summary)
+            elif self.desc_label.text().strip() in ("", "Loading description..."):
+                self.desc_label.setText("No description available.")
+        except Exception:
+            pass
+
+        try:
+            updated = False
+            for k in ("path_cover_large", "path_cover_small", "url_cover"):
+                v = rom.get(k)
+                if v and not self.game.get(k):
+                    self.game[k] = v
+                    updated = True
+            # LaunchBox cover fallback (only if server didn't provide a RomM cover)
+            if not self.game.get("url_cover"):
+                lb_cover = resolved.get("cover_url")
+                if lb_cover and isinstance(lb_cover, str) and lb_cover.strip():
+                    self.game["url_cover"] = lb_cover.strip()
+                    updated = True
+            if updated and (not self._cover_full_pixmap or self._cover_full_pixmap.isNull()):
+                self._start_image_fetch()
+        except Exception:
+            pass
 
     def _get_cached_playtime_seconds(self, rom_id):
         if rom_id is None:
@@ -784,11 +855,11 @@ class GameDetailPanel(QWidget):
 
     def _format_rating_stars(self, v):
         if v is None or v == "":
-            return "Unknown"
+            return "☆☆☆☆☆"
         try:
             val = float(v)
             if val <= 0:
-                return "Unknown"
+                return "☆☆☆☆☆"
             # Normalize various scales to 0..5
             if val <= 5:
                 stars = val
@@ -802,7 +873,7 @@ class GameDetailPanel(QWidget):
             full = int(round(stars))
             return "".join(["★" if i < full else "☆" for i in range(5)])
         except Exception:
-            return "Unknown"
+            return "☆☆☆☆☆"
 
     def _format_players(self, v):
         if not v:
@@ -829,11 +900,13 @@ class GameDetailPanel(QWidget):
 
     def _format_playtime(self, v):
         if not v:
-            return "Unknown"
+            return "Not Yet Played"
         try:
             secs = None
             if isinstance(v, (int, float)):
                 secs = float(v)
+                if secs <= 0:
+                    return "Not Yet Played"
                 # If it's too small, it might actually be minutes
                 if 0 < secs < 1000:
                     # Heuristic: treat as minutes if not an obvious seconds counter
@@ -842,9 +915,11 @@ class GameDetailPanel(QWidget):
             elif isinstance(v, str):
                 s = v.strip()
                 if not s:
-                    return "Unknown"
+                    return "Not Yet Played"
                 if s.isdigit():
                     secs = float(int(s))
+                    if secs <= 0:
+                        return "Not Yet Played"
                 else:
                     return s
             if secs is None:
@@ -867,7 +942,7 @@ class GameDetailPanel(QWidget):
                 return f"{hrs}h"
             return f"{hrs}h {rem_m}m"
         except Exception:
-            return "Unknown"
+            return "Not Yet Played"
         
     def uninstall_game(self):
         if self._uninstall_dialog_open:
