@@ -13,8 +13,8 @@ def get_resource_path(relative_path):
     try:
         base_path = sys._MEIPASS
     except Exception:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+        base_path = Path(__file__).resolve().parents[2]
+    return os.fspath(Path(base_path) / relative_path)
 
 def format_speed(bps):
     if bps <= 0:

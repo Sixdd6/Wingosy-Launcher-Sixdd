@@ -108,7 +108,7 @@ class WingosyMainWindow(QMainWindow):
 
         QTimer.singleShot(50, self._ensure_window_within_screen)
         
-        icon_path = get_resource_path("icon.png")
+        icon_path = get_resource_path("assets/icon.png")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
             

@@ -24,7 +24,7 @@ class WingosyTitleBar(QWidget):
         # LEFT SIDE
         # App icon
         self.icon_label = QLabel()
-        icon_path = get_resource_path("icon.png")
+        icon_path = get_resource_path("assets/icon.png")
         if os.path.exists(icon_path):
             pix = QPixmap(icon_path).scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.icon_label.setPixmap(pix)
