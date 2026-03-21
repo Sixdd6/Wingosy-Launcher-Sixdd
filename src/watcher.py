@@ -179,6 +179,7 @@ class WingosyWatcher(QThread):
     conflict_signal = Signal(str, str, str, str) # title, local_path, temp_dl, rom_id
     notify_signal = Signal(str, str) # title, msg
     playtime_updated_signal = Signal(int, int) # rom_id, total_playtime_seconds
+    sync_cache_updated_signal = Signal(int) # rom_id
 
     def __init__(self, client, config):
         super().__init__()
@@ -511,11 +512,30 @@ class WingosyWatcher(QThread):
         if success:
             self.session_errors[rom_id_str] = 0
             entry = self.sync_cache.get(rom_id_str, {})
-            entry["save_mtime"] = new_m
-            entry.pop("save_updated_at", None)
+            if not isinstance(entry, dict):
+                entry = {}
+
+            try:
+                mtime_val = float(new_m or 0)
+            except Exception:
+                mtime_val = 0.0
+
+            if mtime_val > 0:
+                entry["save_mtime"] = mtime_val
+            elif not (
+                entry.get("save_mtime") or
+                entry.get("save_updated_at") or
+                entry.get("state_mtime") or
+                entry.get("state_updated_at")
+            ):
+                entry["save_updated_at"] = datetime.now(timezone.utc).isoformat()
             logging.info(f"[Watcher] Sync success for {rom_id_str}. Cache updated.")
             self.sync_cache[rom_id_str] = entry
             self.save_cache()
+            try:
+                self.sync_cache_updated_signal.emit(int(rom_id))
+            except Exception:
+                pass
         else:
             self.session_errors[rom_id_str] = self.session_errors.get(rom_id_str, 0) + 1
 
@@ -618,6 +638,10 @@ class WingosyWatcher(QThread):
                 self.sync_cache[str(rom_id)] = {"save_updated_at": server_updated_at}
                 self.save_cache()
                 self.log_signal.emit(f"✨ Cloud save applied for {title}!")
+                try:
+                    self.sync_cache_updated_signal.emit(int(rom_id))
+                except Exception:
+                    pass
         except Exception as e:
             logging.error(f"[Watcher] _apply_cloud_file failed: {e}")
         finally:

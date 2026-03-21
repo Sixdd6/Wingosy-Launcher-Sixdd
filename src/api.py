@@ -365,7 +365,36 @@ class RomMClient:
     def get_latest_save(self, rom_id):
         items = self.list_all_saves(rom_id)
         if not items: return None
-        return sorted(items, key=lambda x: x.get("updated_at", ""), reverse=True)[0]
+        return sorted(items, key=self._item_updated_key, reverse=True)[0]
+
+    def _normalize_collection_items(self, payload, preferred_keys=None):
+        if isinstance(payload, list):
+            return payload
+        if not isinstance(payload, dict):
+            return []
+
+        keys = list(preferred_keys or []) + ["items", "results", "data", "saves", "states"]
+        seen = set()
+        for key in keys:
+            if key in seen:
+                continue
+            seen.add(key)
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+        return []
+
+    def _item_updated_key(self, item):
+        if not isinstance(item, dict):
+            return ""
+        return (
+            item.get("updated_at")
+            or item.get("modified_at")
+            or item.get("created_at")
+            or item.get("date")
+            or item.get("timestamp")
+            or ""
+        )
 
     def list_all_saves(self, rom_id):
         try:
@@ -377,8 +406,7 @@ class RomMClient:
                 verify=CERTIFI_PATH
             )
             if r.status_code != 200: return []
-            items = r.json()
-            return items if isinstance(items, list) else items.get("items", [])
+            return self._normalize_collection_items(r.json(), preferred_keys=["saves"])
         except Exception as e:
             print(f"[API] list_all_saves error: {e}")
             return []
@@ -396,7 +424,7 @@ class RomMClient:
     def get_latest_state(self, rom_id):
         items = self.list_all_states(rom_id)
         if not items: return None
-        return sorted(items, key=lambda x: x.get("updated_at", ""), reverse=True)[0]
+        return sorted(items, key=self._item_updated_key, reverse=True)[0]
 
     def list_all_states(self, rom_id):
         try:
@@ -408,8 +436,7 @@ class RomMClient:
                 verify=CERTIFI_PATH
             )
             if r.status_code != 200: return []
-            items = r.json()
-            return items if isinstance(items, list) else items.get("items", [])
+            return self._normalize_collection_items(r.json(), preferred_keys=["states"])
         except Exception as e:
             print(f"[API] list_all_states error: {e}")
             return []

@@ -1,7 +1,8 @@
 import os
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QListWidget, QListWidgetItem, QMessageBox)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QListWidget, QListWidgetItem)
 from PySide6.QtCore import Qt, QTimer, Signal
 from src.ui.widgets import format_size
+from src.ui.dialogs.styled_messagebox import StyledMessageBox
 
 class ExePickerDialog(QWidget):
     exe_selected = Signal(str)
@@ -102,7 +103,7 @@ class ExePickerDialog(QWidget):
             self.exe_selected.emit(self.selected_exe)
             self.close()
         else:
-            QMessageBox.warning(self, "No Selection — Wingosy", "Please select an executable.")
+            StyledMessageBox.warning(self, "No Selection — Wingosy", "Please select an executable.")
 
 class AssetPickerDialog(QWidget):
     from PySide6.QtCore import Signal
@@ -174,4 +175,4 @@ class AssetPickerDialog(QWidget):
             self.asset_selected.emit(item.text(), item.data(Qt.UserRole))
             self.close()
         else:
-            QMessageBox.warning(self, "No Selection", "Please select a file to download.")
+            StyledMessageBox.warning(self, "No Selection", "Please select a file to download.")

@@ -7,11 +7,12 @@ from pathlib import Path
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,   
                              QPushButton, QLineEdit, QScrollArea, QGridLayout,
                              QComboBox, QSizePolicy, QAbstractItemView, QGraphicsDropShadowEffect, QStackedWidget)
-from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QPixmap, QImage, QColor, QFontMetrics
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve, QThread, Slot
+from PySide6.QtGui import QPixmap, QImage, QColor, QFontMetrics, QPainter
+from PySide6.QtSvg import QSvgRenderer
 
 from src.ui.threads import ImageFetcher
-from src.ui.widgets import format_speed
+from src.ui.widgets import format_speed, get_resource_path
 from src.platforms import RETROARCH_PLATFORMS, platform_matches
 from src import emulators, download_registry
 
@@ -103,15 +104,54 @@ class SmoothScrollArea(QScrollArea):
         self._scroll_animation.setEndValue(int(self._target_value))
         self._scroll_animation.start()
 
+class CloudSaveProbeThread(QThread):
+    probed = Signal(int, object)
+
+    def __init__(self, client, rom_ids):
+        super().__init__()
+        self.client = client
+        self.rom_ids = list(rom_ids or [])
+
+    def run(self):
+        for rid in self.rom_ids:
+            if self.isInterruptionRequested():
+                return
+            try:
+                latest_save = None
+                latest_state = None
+                try:
+                    latest_save = self.client.get_latest_save(rid)
+                except Exception:
+                    latest_save = None
+                try:
+                    latest_state = self.client.get_latest_state(rid)
+                except Exception:
+                    latest_state = None
+
+                payload = {
+                    "save_updated_at": latest_save.get('updated_at') if isinstance(latest_save, dict) else None,
+                    "state_updated_at": latest_state.get('updated_at') if isinstance(latest_state, dict) else None,
+                }
+                if not payload.get("save_updated_at") and not payload.get("state_updated_at"):
+                    self.probed.emit(int(rid), None)
+                else:
+                    self.probed.emit(int(rid), payload)
+            except Exception:
+                try:
+                    self.probed.emit(int(rid), None)
+                except Exception:
+                    pass
+
 class GameCard(QWidget):
     clicked = Signal(object)
     def __init__(self, game, client, config, sync_cache):
         super().__init__()
         self.game, self.client, self.config, self.sync_cache = game, client, config, sync_cache
         self._selected = False
+        self._badge_render_state = {}
         
         self.update_style()
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(4)
@@ -129,35 +169,15 @@ class GameCard(QWidget):
         rom_exists = game.get('_local_exists', False)
 
         if rom_exists:
-            self.local_indicator = QLabel("✓", self)
-            self.local_indicator.setStyleSheet("""
-                color: white;
-                background-color: #4caf50;
-                border-radius: 7px;
-                font-size: 9px;
-                font-weight: bold;
-                padding: 1px 3px;
-            """)
-            self.local_indicator.setFixedSize(14, 14)
+            self.local_indicator = QLabel(self)
+            self.local_indicator.setStyleSheet("background-color: #4caf50; border-radius: 7px;")
             self.local_indicator.setAlignment(Qt.AlignCenter)
-            self.local_indicator.move(4, 4)
+            self.local_indicator.setProperty("_badge_svg", "assets/library-svgrepo-com.svg")
+            self.local_indicator.setToolTip("Installed")
             self.local_indicator.show()
 
-        has_cloud_save = str(game.get('id', '')) in sync_cache
-        if has_cloud_save:
-            self.cloud_indicator = QLabel("☁", self)
-            self.cloud_indicator.setStyleSheet("""
-                color: white;
-                background-color: #1565c0;
-                border-radius: 7px;
-                font-size: 9px;
-                font-weight: bold;
-                padding: 1px 3px;
-            """)
-            self.cloud_indicator.setFixedSize(14, 14)
-            self.cloud_indicator.setAlignment(Qt.AlignCenter)
-            self.cloud_indicator.move(22, 4)
-            self.cloud_indicator.show()
+        self.refresh_cloud_indicator(sync_cache)
+        self._update_badge_layout(force=True)
 
         self.title_label = QLabel()
         self.title_label.setFixedHeight(30)
@@ -185,6 +205,31 @@ class GameCard(QWidget):
 
         # Listen to registry for downloads/extractions
         download_registry.add_listener(str(self.game['id']), self.on_registry_update)
+
+    def refresh_cloud_indicator(self, sync_cache):
+        try:
+            rom_id = str(self.game.get('id', ''))
+            entry = sync_cache.get(rom_id, {}) if isinstance(sync_cache, dict) else {}
+            has_cloud_save = False
+            if isinstance(entry, dict):
+                has_cloud_save = bool(
+                    entry.get('save_updated_at') or entry.get('save_mtime') or
+                    entry.get('state_updated_at') or entry.get('state_mtime')
+                )
+
+            if has_cloud_save:
+                if not hasattr(self, 'cloud_indicator'):
+                    self.cloud_indicator = QLabel(self)
+                    self.cloud_indicator.setStyleSheet("background-color: #1565c0; border-radius: 7px;")
+                    self.cloud_indicator.setAlignment(Qt.AlignCenter)
+                    self.cloud_indicator.setProperty("_badge_svg", "assets/save-floppy-svgrepo-com.svg")
+                    self.cloud_indicator.setToolTip("Cloud save available")
+                self.cloud_indicator.show()
+            elif hasattr(self, 'cloud_indicator'):
+                self.cloud_indicator.hide()
+            self._update_badge_layout()
+        except Exception:
+            return
 
     def update_title_width(self, available_width):
         try:
@@ -220,21 +265,131 @@ class GameCard(QWidget):
         self.game['_local_exists'] = exists
         if exists:
             if not hasattr(self, 'local_indicator'):
-                self.local_indicator = QLabel("✓", self)
-                self.local_indicator.setStyleSheet("""
-                    color: white;
-                    background-color: #4caf50;
-                    border-radius: 7px;
-                    font-size: 9px;
-                    font-weight: bold;
-                    padding: 1px 3px;
-                """)
-                self.local_indicator.setFixedSize(14, 14)
+                self.local_indicator = QLabel(self)
+                self.local_indicator.setStyleSheet("background-color: #4caf50; border-radius: 7px;")
                 self.local_indicator.setAlignment(Qt.AlignCenter)
-                self.local_indicator.move(4, 4)
+                self.local_indicator.setProperty("_badge_svg", "assets/library-svgrepo-com.svg")
+                self.local_indicator.setToolTip("Installed")
             self.local_indicator.show()
         elif hasattr(self, 'local_indicator'):
             self.local_indicator.hide()
+        self._update_badge_layout()
+
+    def resizeEvent(self, event):
+        try:
+            self._update_badge_layout()
+        except Exception:
+            pass
+        super().resizeEvent(event)
+
+    def showEvent(self, event):
+        try:
+            self._update_badge_layout(force=True)
+        except Exception:
+            pass
+        super().showEvent(event)
+
+    def _compute_badge_metrics(self):
+        try:
+            base = int(min(self.width(), self.img_label.width() or self.width()) * 0.11)
+        except Exception:
+            base = 16
+
+        badge_px = max(16, min(24, base))
+        icon_px = max(12, badge_px - 6)
+        pad_px = max(3, min(6, badge_px // 4))
+        gap_px = max(3, min(8, pad_px + 2))
+        return badge_px, icon_px, pad_px, gap_px
+
+    def _update_badge_layout(self, force=False):
+        badge_px, icon_px, pad_px, gap_px = self._compute_badge_metrics()
+        x = pad_px
+        y = pad_px
+
+        # Installed badge
+        if hasattr(self, 'local_indicator'):
+            try:
+                if self.local_indicator.isVisible():
+                    self._apply_badge_geometry(self.local_indicator, x, y, badge_px)
+                    self._apply_badge_icon(self.local_indicator, icon_px, force=force)
+                    x += badge_px + gap_px
+            except Exception:
+                pass
+
+        # Cloud badge
+        if hasattr(self, 'cloud_indicator'):
+            try:
+                if self.cloud_indicator.isVisible():
+                    self._apply_badge_geometry(self.cloud_indicator, x, y, badge_px)
+                    self._apply_badge_icon(self.cloud_indicator, icon_px, force=force)
+            except Exception:
+                pass
+
+        # Update rounded corners to match computed size
+        try:
+            r = max(6, badge_px // 2)
+            if hasattr(self, 'local_indicator'):
+                self.local_indicator.setStyleSheet(f"background-color: #4caf50; border-radius: {r}px;")
+            if hasattr(self, 'cloud_indicator'):
+                self.cloud_indicator.setStyleSheet(f"background-color: #1565c0; border-radius: {r}px;")
+        except Exception:
+            pass
+
+    def _apply_badge_geometry(self, w, x, y, size):
+        try:
+            w.setFixedSize(int(size), int(size))
+            w.move(int(x), int(y))
+        except Exception:
+            return
+
+    def _apply_badge_icon(self, badge_label, icon_px, force=False):
+        try:
+            rel_svg = badge_label.property("_badge_svg")
+            if not rel_svg:
+                return
+            dpr = 1.0
+            try:
+                dpr = float(self.devicePixelRatioF())
+            except Exception:
+                pass
+
+            key = (rel_svg, int(icon_px), float(dpr))
+            if (not force) and self._badge_render_state.get(badge_label) == key:
+                return
+
+            pm = self._render_svg_badge(rel_svg, int(icon_px), int(icon_px), dpr=dpr)
+            if not pm.isNull():
+                badge_label.setPixmap(pm)
+                self._badge_render_state[badge_label] = key
+        except Exception:
+            return
+
+    def _render_svg_badge(self, relative_svg_path, w, h, dpr=1.0):
+        try:
+            svg_path = get_resource_path(relative_svg_path)
+            renderer = QSvgRenderer(svg_path)
+            if not renderer.isValid():
+                return QPixmap()
+            try:
+                dpr = float(dpr)
+            except Exception:
+                dpr = 1.0
+            pw = max(1, int(round(float(w) * dpr)))
+            ph = max(1, int(round(float(h) * dpr)))
+            pm = QPixmap(pw, ph)
+            pm.fill(Qt.transparent)
+            try:
+                pm.setDevicePixelRatio(dpr)
+            except Exception:
+                pass
+            painter = QPainter(pm)
+            try:
+                renderer.render(painter)
+            finally:
+                painter.end()
+            return pm
+        except Exception:
+            return QPixmap()
 
     def set_selected(self, selected):
         self._selected = selected
@@ -277,11 +432,11 @@ class GameCard(QWidget):
         self.fetcher = ImageFetcher(self.game['id'], url)
         fetcher = self.fetcher
         self.fetcher.finished.connect(self.set_image)
-        self.fetcher.finished.connect(lambda gid, img, f=fetcher: main_window._on_image_fetched(f, generation))
+        self.fetcher.finished.connect(lambda _gid, _img, _raw, _fmt, _is_animated, f=fetcher: main_window._on_image_fetched(f, generation))
         self.fetcher.start()
         return self.fetcher
 
-    def set_image(self, game_id, image):
+    def set_image(self, game_id, image, _raw=b"", _fmt="", _is_animated=False):
         try:
             if (not image) or image.isNull():
                 w = self.img_label.width() or 150
@@ -380,6 +535,9 @@ class LibraryTab(QWidget):
         self._cover_apply_timer.setInterval(0)
         self._cover_apply_timer.timeout.connect(self._process_cover_apply_queue)
 
+        self._cloud_probe_thread = None
+        self._cloud_probe_pending = set()
+
         self._scroll_debounce = QTimer()
         self._scroll_debounce.setSingleShot(True)
         self._scroll_debounce.setInterval(150)  # ms cooldown
@@ -390,6 +548,16 @@ class LibraryTab(QWidget):
         self._library_update_timer.setSingleShot(True)
         self._library_update_timer.setInterval(300)  # 300ms debounce
         self._library_update_timer.timeout.connect(self._do_library_refresh)
+
+        try:
+            watcher = getattr(self.main_window, 'watcher', None)
+        except Exception:
+            watcher = None
+        if watcher and hasattr(watcher, 'sync_cache_updated_signal'):
+            try:
+                watcher.sync_cache_updated_signal.connect(self._on_sync_cache_updated, Qt.QueuedConnection)
+            except Exception:
+                pass
 
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
@@ -477,6 +645,7 @@ class LibraryTab(QWidget):
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setWidget(self.grid_widget)
         self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll)
+
         self.scroll_area.viewport().installEventFilter(self)
 
         self._resize_debounce = QTimer()
@@ -518,6 +687,143 @@ class LibraryTab(QWidget):
                     logging.debug("[Library] XInput unavailable — gamepad support disabled")
         else:
             logging.debug("[Library] Gamepad support currently only available on Windows via XInput")
+
+    def _on_sync_cache_updated(self, rom_id):
+        try:
+            sync_cache = (self.main_window.watcher.sync_cache
+                          if self.main_window.watcher else {})
+            rom_id_str = str(rom_id)
+
+            try:
+                detail = getattr(self, 'detail_panel', None)
+            except Exception:
+                detail = None
+            if detail:
+                try:
+                    game = getattr(detail, 'game', {})
+                    if isinstance(game, dict) and str(game.get('id')) == rom_id_str:
+                        if hasattr(detail, 'refresh_badges_row'):
+                            QTimer.singleShot(0, detail.refresh_badges_row)
+                except (RuntimeError, AttributeError):
+                    pass
+            for card in list(getattr(self, '_all_cards', []) or []):
+                try:
+                    game = getattr(card, 'game', {})
+                    if not isinstance(game, dict):
+                        continue
+                    if str(game.get('id')) != rom_id_str:
+                        continue
+                    if hasattr(card, 'refresh_cloud_indicator'):
+                        card.refresh_cloud_indicator(sync_cache)
+                except (RuntimeError, AttributeError):
+                    continue
+        except Exception:
+            return
+
+    def _request_cloud_badge_prime(self, games):
+        try:
+            watcher = getattr(self.main_window, 'watcher', None)
+        except Exception:
+            watcher = None
+        if not watcher:
+            return
+
+        try:
+            sync_cache = watcher.sync_cache if isinstance(watcher.sync_cache, dict) else {}
+        except Exception:
+            sync_cache = {}
+
+        ids = []
+        for g in (games or []):
+            try:
+                if not isinstance(g, dict):
+                    continue
+                rid = g.get('id')
+                if rid is None:
+                    continue
+                rid_str = str(rid)
+                entry = sync_cache.get(rid_str)
+                if isinstance(entry, dict) and (
+                    entry.get('save_updated_at') or entry.get('save_mtime') or
+                    entry.get('state_updated_at') or entry.get('state_mtime')
+                ):
+                    continue
+                if rid_str in self._cloud_probe_pending:
+                    continue
+                self._cloud_probe_pending.add(rid_str)
+                ids.append(rid)
+            except Exception:
+                continue
+
+        if not ids:
+            return
+
+        try:
+            t = getattr(self, '_cloud_probe_thread', None)
+            if t and t.isRunning():
+                return
+        except Exception:
+            pass
+
+        try:
+            self._cloud_probe_thread = CloudSaveProbeThread(self.client, ids)
+            self._cloud_probe_thread.probed.connect(self._on_cloud_probe_result, Qt.QueuedConnection)
+            self._cloud_probe_thread.finished.connect(lambda: setattr(self, '_cloud_probe_thread', None))
+            self._cloud_probe_thread.start()
+        except Exception:
+            return
+
+    @Slot(int, object)
+    def _on_cloud_probe_result(self, rom_id, updated_at):
+        try:
+            rid_str = str(rom_id)
+            try:
+                self._cloud_probe_pending.discard(rid_str)
+            except Exception:
+                pass
+
+            if not updated_at:
+                return
+
+            watcher = getattr(self.main_window, 'watcher', None)
+            if not watcher:
+                return
+
+            entry = watcher.sync_cache.get(rid_str)
+            if not isinstance(entry, dict):
+                entry = {}
+
+            if isinstance(updated_at, dict):
+                save_updated_at = updated_at.get("save_updated_at")
+                state_updated_at = updated_at.get("state_updated_at")
+
+                if save_updated_at and not (entry.get('save_mtime') or entry.get('save_updated_at')):
+                    entry['save_updated_at'] = save_updated_at
+                if state_updated_at and not (entry.get('state_mtime') or entry.get('state_updated_at')):
+                    entry['state_updated_at'] = state_updated_at
+
+                if not save_updated_at and not state_updated_at:
+                    return
+            else:
+                if entry.get('save_mtime') or entry.get('save_updated_at'):
+                    return
+                entry['save_updated_at'] = updated_at
+
+            watcher.sync_cache[rid_str] = entry
+            try:
+                watcher.save_cache()
+            except Exception:
+                pass
+
+            try:
+                if hasattr(watcher, 'sync_cache_updated_signal'):
+                    watcher.sync_cache_updated_signal.emit(int(rom_id))
+                else:
+                    self._on_sync_cache_updated(int(rom_id))
+            except Exception:
+                return
+        except Exception:
+            return
 
     def _poll_gamepad(self):
         if not hasattr(self, 'xinput'):
@@ -710,6 +1016,11 @@ class LibraryTab(QWidget):
         finally:
             self.grid_widget.setUpdatesEnabled(True)
 
+        try:
+            self._request_cloud_badge_prime([getattr(c, 'game', None) for c in (self._all_cards or [])])
+        except Exception:
+            pass
+
     def eventFilter(self, obj, event):
         try:
             if (obj is self.scroll_area.viewport()
@@ -859,6 +1170,11 @@ class LibraryTab(QWidget):
                     col = idx % cols
                     try:
                         self.grid_layout.addWidget(card, row, col)
+                        try:
+                            if hasattr(card, '_update_badge_layout'):
+                                card._update_badge_layout(force=True)
+                        except Exception:
+                            pass
                     except (RuntimeError, AttributeError):
                         continue
 
@@ -1084,6 +1400,11 @@ class LibraryTab(QWidget):
                     card.setFixedSize(card_w, img_h + gap_h + title_h)
                     card.img_label.setFixedSize(img_w, img_h)
                     card.update_title_width(img_w)
+                    try:
+                        if hasattr(card, '_update_badge_layout'):
+                            card._update_badge_layout(force=True)
+                    except Exception:
+                        pass
                     self.grid_layout.addWidget(card, row, col)
                     self._all_cards.append(card)
                 except (RuntimeError, AttributeError):
@@ -1163,10 +1484,12 @@ class LibraryTab(QWidget):
         self.stack.addWidget(self.detail_panel)
         self.stack.setCurrentWidget(self.detail_panel)
         self.filter_widget.hide() # Hide filters while in detail view
+        self.install_filter_widget.hide()
 
     def _close_detail(self):
         self.stack.setCurrentWidget(self.grid_page)
         self.filter_widget.show()
+        self.install_filter_widget.show()
         if self.detail_panel:
             try:
                 self.stack.removeWidget(self.detail_panel)

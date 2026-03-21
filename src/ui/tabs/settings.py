@@ -5,12 +5,13 @@ import logging
 import webbrowser
 from pathlib import Path
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QLineEdit, QPushButton, QMessageBox, QProgressBar, 
+                             QLineEdit, QPushButton, QProgressBar, 
                              QComboBox, QFileDialog, QSpinBox, QScrollArea,
                              QCheckBox, QFrame, QApplication)
 from PySide6.QtCore import Qt, QTimer
 
 from src.ui.threads import UpdaterThread, SelfUpdateThread
+from src.ui.dialogs.styled_messagebox import StyledMessageBox
 
 def _get_check_icon_path():
     import os
@@ -31,7 +32,7 @@ def _get_check_icon_path():
         pen.setCapStyle(Qt.RoundCap)
         pen.setJoinStyle(Qt.RoundJoin)
         painter.setPen(pen)
-        # Draw checkmark: ✓
+        # Draw checkmark: 
         painter.drawPolyline([
             QPointF(2, 7),
             QPointF(5, 10),
@@ -375,10 +376,10 @@ class SettingsTab(QWidget):
         self.test_btn.setText("Test Connection")
         self.test_btn.setEnabled(True)
         if ok:
-            QMessageBox.information(self, "Success", f"{msg} Click Apply.")
+            StyledMessageBox.information(self, "Success", f"{msg} Click Apply.")
             self.re_btn.setVisible(True)
         else:
-            QMessageBox.warning(self, "Failed", msg)
+            StyledMessageBox.warning(self, "Failed", msg)
             self.re_btn.setVisible(False)
             
     def _apply_and_restart(self):
@@ -413,8 +414,8 @@ class SettingsTab(QWidget):
         ctype = self.controller_combo.currentData()
         preview = {
             "xinput": "Xbox: A=Confirm, B=Back, LStick=Navigate",
-            "ps4": "PS4: ✕=Confirm, ○=Back, LStick=Navigate",
-            "ps5": "PS5: ✕=Confirm, ○=Back, LStick=Navigate",
+            "ps4": "PS4: =Confirm, =Back, LStick=Navigate",
+            "ps5": "PS5: =Confirm, =Back, LStick=Navigate",
             "switch": "Switch: A=Confirm, B=Back, LStick=Navigate",
             "generic": "Generic: Btn0=Confirm, Btn1=Back"
         }.get(ctype, "")
@@ -427,17 +428,17 @@ class SettingsTab(QWidget):
         
     def on_update_result(self, available, version, url):
         if available:
-            choice = QMessageBox.question(
+            choice = StyledMessageBox.question(
                 self,
                 "Update Available",
                 f"A new version is available: v{version}\n\nOpen the releases page?",
-                QMessageBox.Yes | QMessageBox.Cancel,
-                QMessageBox.Yes,
+                StyledMessageBox.Yes | StyledMessageBox.Cancel,
+                StyledMessageBox.Yes,
             )
-            if choice == QMessageBox.Yes:
+            if choice == StyledMessageBox.Yes:
                 webbrowser.open(url)
         else:
-            QMessageBox.information(self, "No Updates", "You are on the latest version.")
+            StyledMessageBox.information(self, "No Updates", "You are on the latest version.")
             
     def start_self_update(self):
         self.up_btn.setEnabled(False)
@@ -454,7 +455,7 @@ class SettingsTab(QWidget):
     def on_self_update_finished(self, success, msg):
         if success:
             self.pbar.setValue(100)
-            QMessageBox.information(self, "Done", "Update installed. Restarting...")
+            StyledMessageBox.information(self, "Done", "Update installed. Restarting...")
             exe = str(Path(sys.executable).resolve())
             
             if sys.platform == "win32":
@@ -495,10 +496,10 @@ del "%~f0"
         else:
             self.up_btn.setEnabled(True)
             self.pbar.setVisible(False)
-            QMessageBox.critical(self, "Failed", msg)
+            StyledMessageBox.critical(self, "Failed", msg)
             
     def do_logout(self):
-        if QMessageBox.question(self, "Log Out", "Are you sure you want to log out?") == QMessageBox.Yes:
+        if StyledMessageBox.question(self, "Log Out", "Are you sure you want to log out?", StyledMessageBox.Yes | StyledMessageBox.No) == StyledMessageBox.Yes:
             self.main_window.client.logout()
             self.config.set("password", None)
             sys.exit(0)

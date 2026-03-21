@@ -1,10 +1,11 @@
 import os
 from pathlib import Path
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QFileDialog, QDialog, QScrollArea, QComboBox)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QFileDialog, QDialog, QScrollArea, QComboBox)
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from src import windows_saves
 from src.pcgamingwiki import fetch_save_locations
 from src.utils import resolve_local_rom_path
+from src.ui.dialogs.styled_messagebox import StyledMessageBox
 
 EXCLUDED_EXES = [
     "unins000.exe", "uninstall.exe", "setup.exe",
@@ -294,7 +295,7 @@ class WindowsGameSettingsDialog(QWidget):
         if not folder.exists(): return
         exes = [str(p) for p in folder.rglob("*.exe") if not any(e.lower() in str(p).lower() for e in EXCLUDED_EXES)]
         if not exes:
-            QMessageBox.information(self, "No EXEs — Wingosy", "None found.")
+            StyledMessageBox.information(self, "No EXEs — Wingosy", "None found.")
             return
         if len(exes) == 1:
             self.default_exe = exes[0]
@@ -329,7 +330,7 @@ class WindowsGameSettingsDialog(QWidget):
         self.update_ui()
         
         if not suggestions:
-            QMessageBox.information(self, "No Results — Wingosy", "No save locations found on PCGamingWiki.")
+            StyledMessageBox.information(self, "No Results — Wingosy", "No save locations found on PCGamingWiki.")
             return
             
         dlg = WikiSuggestionDialog(suggestions, self)

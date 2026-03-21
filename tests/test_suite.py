@@ -731,6 +731,41 @@ class TestEmulatorSchema:
             assert "yuzu" not in emu["name"].lower()
 
 
+class TestCloudSaveProbeThread:
+    def test_probe_emits_none_when_no_save_or_state(self):
+        from unittest.mock import MagicMock
+        from src.ui.tabs.library import CloudSaveProbeThread
+
+        client = MagicMock()
+        client.get_latest_save = MagicMock(return_value=None)
+        client.get_latest_state = MagicMock(return_value=None)
+
+        t = CloudSaveProbeThread(client, [123])
+        t.probed = MagicMock()
+
+        t.run()
+
+        t.probed.emit.assert_called_once_with(123, None)
+
+    def test_probe_emits_state_payload_when_state_exists(self):
+        from unittest.mock import MagicMock
+        from src.ui.tabs.library import CloudSaveProbeThread
+
+        client = MagicMock()
+        client.get_latest_save = MagicMock(return_value=None)
+        client.get_latest_state = MagicMock(return_value={"updated_at": "2025-01-01T00:00:00Z"})
+
+        t = CloudSaveProbeThread(client, [5])
+        t.probed = MagicMock()
+
+        t.run()
+
+        t.probed.emit.assert_called_once_with(
+            5,
+            {"save_updated_at": None, "state_updated_at": "2025-01-01T00:00:00Z"},
+        )
+
+
 # ── Live Connection ───────────────────────────────────────────────────────
 
 @pytest.mark.skipif(not LIVE, reason="requires live RomM server (set ROMM_TEST_LIVE=1)")

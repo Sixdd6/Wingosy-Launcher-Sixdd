@@ -1,6 +1,8 @@
 import re
-from PySide6.QtWidgets import (QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QFormLayout, QDialogButtonBox, QMessageBox)
+from PySide6.QtWidgets import (QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QFormLayout, QDialogButtonBox)
 from PySide6.QtCore import Qt, QTimer, Signal
+
+from src.ui.dialogs.styled_messagebox import StyledMessageBox
 
 class WelcomeDialog(QDialog):
     def __init__(self, parent=None):
@@ -122,7 +124,7 @@ class SetupDialog(QDialog):
         
     def validate_and_accept(self):
         if not re.match(r'^https?://.+', self.host_input.text().strip()):
-            QMessageBox.warning(self, "Invalid Host — Wingosy", "Enter a valid URL.")
+            StyledMessageBox.warning(self, "Invalid Host — Wingosy", "Enter a valid URL.")
             return
         self.accept()
 

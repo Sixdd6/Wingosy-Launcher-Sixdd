@@ -85,7 +85,7 @@ class LocalDiscoveryWorker(QThread):
         self.finished_discovery.emit()
 
 class ImageFetcher(QThread):
-    finished = Signal(int, QImage)
+    finished = Signal(int, QImage, bytes, str, bool)
     def __init__(self, game_id, url):
         super().__init__()
         self.game_id = game_id
@@ -93,7 +93,7 @@ class ImageFetcher(QThread):
     def run(self):
         try:
             if self.isInterruptionRequested():
-                self.finished.emit(self.game_id, QImage())
+                self.finished.emit(self.game_id, QImage(), b"", "", False)
                 return
 
             cache_dir = Path.home() / ".wingosy" / "cover_cache"
@@ -151,12 +151,38 @@ class ImageFetcher(QThread):
                         pass
 
             if self.isInterruptionRequested():
-                self.finished.emit(self.game_id, QImage())
+                self.finished.emit(self.game_id, QImage(), b"", "", False)
                 return
 
+            fmt = ""
+            is_animated = False
+            try:
+                try:
+                    logging.getLogger("PIL").setLevel(logging.WARNING)
+                except Exception:
+                    pass
+                from PIL import Image
+                from io import BytesIO
+
+                im = Image.open(BytesIO(data))
+                fmt = (im.format or "").lower()
+                is_animated = bool(getattr(im, "is_animated", False) and getattr(im, "n_frames", 1) > 1)
+            except Exception:
+                fmt = ""
+                is_animated = False
+
             img = QImage()
-            if img.loadFromData(data):
-                self.finished.emit(self.game_id, img)
+            img_ok = False
+            try:
+                img_ok = bool(img.loadFromData(data))
+            except Exception:
+                img_ok = False
+
+            if is_animated:
+                # Provide the first frame (when Qt can decode it) plus the raw bytes for QMovie.
+                self.finished.emit(self.game_id, img if img_ok else QImage(), data or b"", fmt, True)
+            elif img_ok:
+                self.finished.emit(self.game_id, img, b"", fmt, False)
             else:
                 # If the cache entry is corrupt, delete it so next attempt re-downloads
                 if loaded_from_cache and cache_path is not None:
@@ -164,10 +190,10 @@ class ImageFetcher(QThread):
                         cache_path.unlink()
                     except Exception:
                         pass
-                self.finished.emit(self.game_id, QImage())
+                self.finished.emit(self.game_id, QImage(), b"", fmt, False)
         except Exception:
             try:
-                self.finished.emit(self.game_id, QImage())
+                self.finished.emit(self.game_id, QImage(), b"", "", False)
             except Exception:
                 pass
 

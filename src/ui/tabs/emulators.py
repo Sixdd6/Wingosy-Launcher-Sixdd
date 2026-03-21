@@ -5,7 +5,7 @@ from pathlib import Path
 import logging
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,   
                              QPushButton, QScrollArea, QFormLayout,
-                             QLineEdit, QFileDialog, QMessageBox,
+                             QLineEdit, QFileDialog,
                              QDialog, QComboBox, QDialogButtonBox, QTabWidget,
                              QSpinBox, QCheckBox)
 from PySide6.QtCore import Qt
@@ -14,6 +14,7 @@ from src.ui.threads import (DirectDownloader, DolphinDownloader,
                              GithubDownloader, BiosDownloader, CoreDownloadThread)
 from src.ui.widgets import format_speed, get_resource_path
 from src import emulators
+from src.ui.dialogs.styled_messagebox import StyledMessageBox
 
 def _get_check_icon_path():
     import os
@@ -186,7 +187,7 @@ class EmulatorEditDialog(QDialog):
         slugs = [s.strip() for s in self.slugs_input.text().split(",") if s.strip()]
 
         if not name or not exe or not slugs:
-            QMessageBox.warning(self, "Error", "Name, path, and at least one slug are required.")
+            StyledMessageBox.warning(self, "Error", "Name, path, and at least one slug are required.")
             return
 
         emu_id = name.lower().replace(" ", "_")
@@ -195,7 +196,7 @@ class EmulatorEditDialog(QDialog):
             all_emus = emulators.load_emulators()
             existing = next((e for e in all_emus if e["id"] == emu_id), None)
             if existing and not existing.get("user_defined"):
-                QMessageBox.warning(self, "Error", "Cannot overwrite a built-in emulator. Choose a different name.")
+                StyledMessageBox.warning(self, "Error", "Cannot overwrite a built-in emulator. Choose a different name.")
                 return
 
         mode = self.mode_combo.currentData()
@@ -395,8 +396,8 @@ class EmuListWidget(QWidget):
         all_emus = emulators.load_emulators()
         emu = next((e for e in all_emus if e["id"] == emu_id), None)        
         if not emu: return
-        reply = QMessageBox.question(self, "Remove Emulator", f"Are you sure you want to remove {emu['name']}?")
-        if reply == QMessageBox.Yes:
+        reply = StyledMessageBox.question(self, "Remove Emulator", f"Are you sure you want to remove {emu['name']}?", StyledMessageBox.Yes | StyledMessageBox.No)
+        if reply == StyledMessageBox.Yes:
             all_emus = [e for e in all_emus if e["id"] != emu_id]
             emulators.save_emulators(all_emus)
             self.main_window.log(f"🗑 Removed emulator: {emu['name']}")   

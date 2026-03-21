@@ -6,9 +6,12 @@ import zipfile
 import time
 from pathlib import Path
 import json
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QProgressBar, QScrollArea, QFileDialog, QApplication, QDialog, QSizePolicy)
-from PySide6.QtCore import Qt, QTimer, Signal, QThread, QPoint
-from PySide6.QtGui import QPixmap, QColor
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QProgressBar, QScrollArea, QFileDialog, QApplication, QDialog, QSizePolicy, QFrame)
+from PySide6.QtCore import Qt, QTimer, Signal, QThread, QPoint, QBuffer, QByteArray, QIODevice
+from PySide6.QtGui import QPixmap, QColor, QMovie, QPainter
+from PySide6.QtSvg import QSvgRenderer
+
+from src.ui.dialogs.styled_messagebox import StyledMessageBox
 
 from src.ui.threads import (RomDownloader, ImageFetcher, ConflictResolveThread, GameDescriptionFetcher, RomDetailsFetcher, ExtractionThread)
 from src.ui.widgets import format_size, get_resource_path, format_speed
@@ -28,6 +31,165 @@ EXCLUDED_EXES = [
     "epicportal", "launcher", "activation",
     "touchup", "cleanup", "webhelper"
 ]
+
+
+class UninstallConfirmDialog(QDialog):
+    def __init__(self, title_text, message, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title_text)
+        self.setFixedSize(520, 230)
+
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._drag_pos = None
+
+        self.setStyleSheet("""
+            #UninstallRoot {
+                background-color: #1a1a1a;
+                color: #ffffff;
+                border: 1px solid #2f2f2f;
+                border-radius: 10px;
+            }
+            QLabel {
+                color: #ffffff;
+                font-size: 12px;
+            }
+            QLabel#DlgTitle {
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QPushButton {
+                border-radius: 8px;
+                padding: 10px 12px;
+                min-height: 36px;
+                background: #2b2b2b;
+                border: 1px solid #3a3a3a;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #353535;
+                border-color: #4a4a4a;
+            }
+            QPushButton:pressed {
+                background: #242424;
+            }
+            QPushButton:focus {
+                border-color: #6b6b6b;
+            }
+            QPushButton#DangerBtn {
+                background: #8e0000;
+                border-color: #a40000;
+                color: #ffffff;
+            }
+            QPushButton#DangerBtn:hover {
+                background: #a40000;
+            }
+            QPushButton#CloseBtn {
+                min-height: 28px;
+                padding: 4px 10px;
+                border-radius: 6px;
+                background: transparent;
+                border: 1px solid transparent;
+                color: #cfcfcf;
+                font-weight: 700;
+            }
+            QPushButton#CloseBtn:hover {
+                background: #2b2b2b;
+                border-color: #3a3a3a;
+                color: #ffffff;
+            }
+        """)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+
+        root = QFrame(self)
+        root.setObjectName("UninstallRoot")
+        outer.addWidget(root)
+
+        layout = QVBoxLayout(root)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(12)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
+
+        title_lbl = QLabel(title_text)
+        title_lbl.setObjectName("DlgTitle")
+        title_row.addWidget(title_lbl, 1)
+
+        close_btn = QPushButton("✕")
+        close_btn.setObjectName("CloseBtn")
+        close_btn.setFixedWidth(36)
+        close_btn.clicked.connect(self.reject)
+        title_row.addWidget(close_btn)
+
+        layout.addLayout(title_row)
+
+        msg_lbl = QLabel(message)
+        msg_lbl.setWordWrap(True)
+        msg_lbl.setStyleSheet("color: #d9d9d9;")
+        layout.addWidget(msg_lbl)
+        layout.addStretch(1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
+        uninstall_btn = QPushButton("Uninstall")
+        uninstall_btn.setObjectName("DangerBtn")
+        uninstall_btn.clicked.connect(self.accept)
+        btn_row.addWidget(uninstall_btn)
+
+        layout.addLayout(btn_row)
+
+        cancel_btn.setDefault(True)
+        cancel_btn.setAutoDefault(True)
+
+        QTimer.singleShot(0, self._apply_dark_frame)
+        QTimer.singleShot(50, self._center_on_parent)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos is not None and (event.buttons() & Qt.LeftButton):
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
+
+    def _apply_dark_frame(self):
+        import sys, ctypes
+        if sys.platform == "win32":
+            try:
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    int(self.winId()),
+                    20,
+                    ctypes.byref(ctypes.c_int(1)),
+                    4,
+                )
+            except Exception:
+                pass
+
+    def _center_on_parent(self):
+        p = self.parent()
+        if not p:
+            return
+        pg = p.geometry()
+        x = pg.x() + (pg.width() - self.width()) // 2
+        y = pg.y() + (pg.height() - self.height()) // 2
+        self.move(x, y)
+
 
 def check_retroarch_autosave(ra_exe_path, platform_slug, parent, config=None):
     global _retroarch_autosave_checked
@@ -57,16 +219,16 @@ def check_retroarch_autosave(ra_exe_path, platform_slug, parent, config=None):
     if auto_save != "true": missing.append("savestate_auto_save")
     if auto_load != "true": missing.append("savestate_auto_load")
     
-    result = QMessageBox.question(
+    result = StyledMessageBox.question(
         parent, 
         "RetroArch Auto-Save States — Wingosy", 
         f"Enable auto save/load states in retroarch.cfg?\n\nMissing: {', '.join(missing)}", 
-        QMessageBox.Yes | QMessageBox.No
+        StyledMessageBox.Yes | StyledMessageBox.No
     )
     
-    if result == QMessageBox.Yes:
+    if result == StyledMessageBox.Yes:
         write_retroarch_cfg_values(str(cfg_path), {"savestate_auto_save": "true", "savestate_auto_load": "true"})
-        QMessageBox.information(parent, "RetroArch Auto-Save States — Wingosy", "✅ Auto save/load states enabled.")
+        StyledMessageBox.information(parent, "RetroArch Auto-Save States — Wingosy", "✅ Auto save/load states enabled.")
 
 def check_ppsspp_assets(ra_exe_path, parent):
     global _ppsspp_assets_checked
@@ -78,19 +240,22 @@ def check_ppsspp_assets(ra_exe_path, parent):
     if (system_ppsspp / "ppge_atlas.zim").exists():
         return
         
-    result = QMessageBox.question(
+    result = StyledMessageBox.question(
         parent, 
         "PPSSPP Assets Missing — Wingosy", 
         "Download missing PPSSPP assets now?", 
-        QMessageBox.Yes | QMessageBox.No
+        StyledMessageBox.Yes | StyledMessageBox.No
     )
     
-    if result != QMessageBox.Yes:
+    if result != StyledMessageBox.Yes:
         return
         
-    progress = QMessageBox(parent)
-    progress.setWindowTitle("Downloading PPSSPP Assets — Wingosy")
-    progress.setText("Downloading...")
+    progress = StyledMessageBox(
+        parent,
+        "Downloading PPSSPP Assets — Wingosy",
+        "Downloading...",
+        buttons=0,
+    )
     progress.show()
     QApplication.processEvents()
     
@@ -116,10 +281,10 @@ def check_ppsspp_assets(ra_exe_path, parent):
         
         Path(tmp_path).unlink(missing_ok=True)
         progress.close()
-        QMessageBox.information(parent, "PPSSPP Assets Ready — Wingosy", "✅ Done.")
+        StyledMessageBox.information(parent, "PPSSPP Assets Ready — Wingosy", "✅ Done.")
     except Exception as e:
         progress.close()
-        QMessageBox.warning(parent, "Download Failed — Wingosy", str(e))
+        StyledMessageBox.warning(parent, "Download Failed — Wingosy", str(e))
 
 class GameDetailPanel(QWidget):
     def __init__(self, game, client, config, main_window, on_close=None, parent=None):
@@ -171,13 +336,18 @@ class GameDetailPanel(QWidget):
         content_layout.setContentsMargins(24, 20, 24, 20)
         content_layout.setSpacing(10)
 
-        self.title_label = QLabel(game.get('name'))
-        self.title_label.setStyleSheet("font-size: 20pt; font-weight: bold; color: #1e88e5; background: transparent;")
-        self.title_label.setWordWrap(True)
-        content_layout.addWidget(self.title_label)
-
         sub_layout = QHBoxLayout()
         sub_layout.setSpacing(25)
+
+        left_col_widget = QWidget()
+        left_col_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        left_col_layout = QVBoxLayout(left_col_widget)
+        left_col_layout.setContentsMargins(0, 0, 0, 0)
+        left_col_layout.setSpacing(8)
+        self._left_col_layout = left_col_layout
+
+        self.badges_row = self._build_badges_row()
+        left_col_layout.addWidget(self.badges_row, 0, Qt.AlignLeft)
 
         self.img_label = QLabel()
         self.img_label.setMaximumWidth(900)
@@ -186,10 +356,27 @@ class GameDetailPanel(QWidget):
         self.img_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.img_label.setAlignment(Qt.AlignCenter)
         self.img_label.setStyleSheet("background: #111; border-radius: 6px;")
-        sub_layout.addWidget(self.img_label, 1)
+        left_col_layout.addWidget(self.img_label, 1)
 
-        self.right_column = QVBoxLayout()
+        sub_layout.addWidget(left_col_widget)
+
+        right_col_widget = QWidget()
+        right_col_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.right_column = QVBoxLayout(right_col_widget)
+        self.right_column.setContentsMargins(0, 0, 0, 0)
         self.right_column.setSpacing(0)
+
+        try:
+            badge_h = int(self.badges_row.sizeHint().height())
+        except Exception:
+            badge_h = 0
+        if badge_h > 0:
+            self.right_column.addSpacing(badge_h + left_col_layout.spacing())
+
+        self.title_label = QLabel(game.get('name'))
+        self.title_label.setStyleSheet("font-size: 20pt; font-weight: bold; color: #1e88e5; background: transparent; margin-bottom: 8px;")
+        self.title_label.setWordWrap(True)
+        self.right_column.addWidget(self.title_label)
 
         self.right_column.addWidget(QLabel(f"<b>Platform:</b> {game.get('platform_display_name')}", styleSheet="font-size: 12pt; margin-bottom: 2px; background: transparent;"))
 
@@ -245,7 +432,12 @@ class GameDetailPanel(QWidget):
         self.screenshots_layout.setContentsMargins(0, 0, 0, 0)
         self.screenshots_layout.setSpacing(10)
         self.screenshots_scroll.setWidget(self.screenshots_container)
-        self.screenshots_scroll.setVisible(False)
+        self.screenshots_scroll.setVisible(True)
+
+        self.screenshots_empty_label = QLabel("No screenshots")
+        self.screenshots_empty_label.setAlignment(Qt.AlignCenter)
+        self.screenshots_empty_label.setStyleSheet("color: #666; font-size: 11pt; background: transparent;")
+        self.screenshots_layout.addWidget(self.screenshots_empty_label)
 
         self.pbar = QProgressBar()
         self.pbar.setVisible(False)
@@ -304,15 +496,15 @@ class GameDetailPanel(QWidget):
         self.actions_layout.addWidget(self.can_btn)
 
         self.right_column.addLayout(self.actions_layout)
-        sub_layout.addLayout(self.right_column, 1)
+        sub_layout.addWidget(right_col_widget)
 
         sub_layout.addWidget(self.screenshots_scroll, 0)
-        content_layout.addLayout(sub_layout)
 
-        close_btn = QPushButton("Close")
-        close_btn.setStyleSheet("background: #333; color: #ccc; padding: 10px; font-size: 16pt;")
-        close_btn.clicked.connect(self._close)
-        content_layout.addWidget(close_btn)
+        # Fixed ratio between left cover column and right metadata column
+        # (screenshots column remains fixed-width)
+        sub_layout.setStretch(0, 4)
+        sub_layout.setStretch(1, 6)
+        content_layout.addLayout(sub_layout)
 
         main_layout.addWidget(content, 1)
 
@@ -321,8 +513,124 @@ class GameDetailPanel(QWidget):
         self.destroyed.connect(self._cleanup)
             
         self._cover_full_pixmap = None
+        self._cover_movie = None
+        self._cover_movie_buffer = None
         self._start_image_fetch()
         self._start_metadata_fetch()
+
+    def _render_svg_icon(self, relative_svg_path, w, h):
+        try:
+            svg_path = get_resource_path(relative_svg_path)
+            renderer = QSvgRenderer(svg_path)
+            if not renderer.isValid():
+                return QPixmap()
+            pm = QPixmap(max(1, int(w)), max(1, int(h)))
+            pm.fill(Qt.transparent)
+            painter = QPainter(pm)
+            try:
+                renderer.render(painter)
+            finally:
+                painter.end()
+            return pm
+        except Exception:
+            return QPixmap()
+
+    def _build_badges_row(self):
+        row = QWidget()
+        row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        row.setMinimumHeight(28)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        rom_id = str(self.game.get('id', ''))
+        installed = bool(self.game.get('_local_exists'))
+        if not installed:
+            try:
+                p = self._get_local_rom_path()
+                if self._is_windows and p and p.is_dir():
+                    installed = any(p.rglob("*.exe")) or any(p.rglob("*.bat")) or any(p.rglob("*.cmd"))
+                else:
+                    installed = bool(p and p.exists())
+            except Exception:
+                installed = bool(self.game.get('_local_exists'))
+
+        has_cloud_save = False
+        try:
+            watcher = getattr(self.main_window, 'watcher', None)
+            sync_cache = watcher.sync_cache if watcher and isinstance(watcher.sync_cache, dict) else {}
+            entry = sync_cache.get(rom_id, {}) if isinstance(sync_cache, dict) else {}
+            if isinstance(entry, dict):
+                has_cloud_save = bool(
+                    entry.get('save_updated_at') or entry.get('save_mtime') or
+                    entry.get('state_updated_at') or entry.get('state_mtime')
+                )
+        except Exception:
+            has_cloud_save = False
+
+        def _badge_pill(bg, svg_path, text):
+            w = QWidget()
+            w.setStyleSheet(f"background: {bg}; border-radius: 10px;")
+            hl = QHBoxLayout(w)
+            hl.setContentsMargins(8, 4, 8, 4)
+            hl.setSpacing(6)
+
+            icon = QLabel()
+            pm = self._render_svg_icon(svg_path, 14, 14)
+            if not pm.isNull():
+                icon.setPixmap(pm)
+            icon.setStyleSheet("background: transparent;")
+            hl.addWidget(icon)
+
+            lbl = QLabel(text)
+            lbl.setStyleSheet("background: transparent; color: white; font-weight: bold;")
+            hl.addWidget(lbl)
+            return w
+
+        if installed:
+            layout.addWidget(_badge_pill("#4caf50", "assets/library-svgrepo-com.svg", "Installed"))
+
+        if has_cloud_save:
+            layout.addWidget(_badge_pill("#1565c0", "assets/save-floppy-svgrepo-com.svg", "Cloud"))
+
+        layout.addStretch(1)
+        return row
+
+    def refresh_badges_row(self):
+        try:
+            new_row = self._build_badges_row()
+            old_row = getattr(self, 'badges_row', None)
+            layout = getattr(self, '_left_col_layout', None)
+            if not layout:
+                return
+
+            if old_row is not None:
+                try:
+                    layout.replaceWidget(old_row, new_row)
+                except Exception:
+                    try:
+                        layout.removeWidget(old_row)
+                        layout.insertWidget(0, new_row, 0, Qt.AlignLeft)
+                    except Exception:
+                        return
+                try:
+                    old_row.setParent(None)
+                    old_row.deleteLater()
+                except Exception:
+                    pass
+            else:
+                try:
+                    layout.insertWidget(0, new_row, 0, Qt.AlignLeft)
+                except Exception:
+                    return
+
+            self.badges_row = new_row
+            try:
+                self.updateGeometry()
+            except Exception:
+                pass
+        except Exception:
+            return
 
     def _cleanup(self):
         rom_id = str(self.game["id"])
@@ -330,6 +638,18 @@ class GameDetailPanel(QWidget):
             download_registry.remove_listener(rom_id, self._progress_listener)
         if hasattr(self, '_flush_timer') and self._flush_timer.isActive():
             self._flush_timer.stop()
+        try:
+            mv = getattr(self, "_cover_movie", None)
+            if mv is not None:
+                try:
+                    mv.stop()
+                except Exception:
+                    pass
+            self._cover_movie = None
+            self._cover_movie_buffer = None
+        except Exception:
+            self._cover_movie = None
+            self._cover_movie_buffer = None
 
     def _build_header(self, game_name):
         header = QWidget()
@@ -422,6 +742,10 @@ class GameDetailPanel(QWidget):
             self.can_btn.hide()
             self.speed_label.setText("")
             self._update_button_states()
+            try:
+                self.refresh_badges_row()
+            except Exception:
+                pass
             return
 
         if total > 0:
@@ -495,6 +819,10 @@ class GameDetailPanel(QWidget):
             # Direct file download complete — mark local exists
             self.game['_local_exists'] = True
             self._update_button_states()
+            try:
+                self.refresh_badges_row()
+            except Exception:
+                pass
             self.main_window.library_tab.apply_filters()
 
     def _on_extraction_finished(self, path):
@@ -502,6 +830,10 @@ class GameDetailPanel(QWidget):
         # Mark local exists directly on the game dict so _update_button_states works
         self.game['_local_exists'] = True
         self._update_button_states()
+        try:
+            self.refresh_badges_row()
+        except Exception:
+            pass
         # Refresh library in background to update card in grid
         # Use apply_filters instead of full re-fetch to avoid closing the detail panel
         self.main_window.library_tab.apply_filters()
@@ -565,8 +897,12 @@ class GameDetailPanel(QWidget):
         url = self.client.get_cover_url(self.game)
         if url:
             self.it = ImageFetcher(self.game['id'], url)
-            def _safe_set_pixmap(g, img):
+            def _safe_set_pixmap(g, img, _raw=b"", _fmt="", _is_animated=False):
                 try:
+                    if _is_animated and _raw:
+                        self._set_cover_movie(_raw, _fmt)
+                        return
+
                     pixmap = None
                     try:
                         if img and (not img.isNull()):
@@ -575,6 +911,14 @@ class GameDetailPanel(QWidget):
                         pixmap = None
 
                     if pixmap and not pixmap.isNull():
+                        try:
+                            mv = getattr(self, "_cover_movie", None)
+                            if mv is not None:
+                                mv.stop()
+                        except Exception:
+                            pass
+                        self._cover_movie = None
+                        self._cover_movie_buffer = None
                         self._cover_full_pixmap = pixmap
                         self._update_cover_pixmap()
                     else:
@@ -588,13 +932,59 @@ class GameDetailPanel(QWidget):
         else:
             self._render_placeholder()
 
+    def _set_cover_movie(self, raw, fmt=""):
+        try:
+            try:
+                if self._cover_movie is not None:
+                    self._cover_movie.stop()
+            except Exception:
+                pass
+
+            qba = QByteArray(raw)
+            buf = QBuffer()
+            buf.setData(qba)
+            buf.open(QIODevice.ReadOnly)
+
+            mv = QMovie(buf)
+            if fmt:
+                try:
+                    mv.setFormat(str(fmt).lower().encode("ascii", errors="ignore"))
+                except Exception:
+                    pass
+
+            try:
+                mv.setCacheMode(QMovie.CacheNone)
+            except Exception:
+                pass
+
+            try:
+                mv.setScaledSize(self.img_label.size())
+            except Exception:
+                pass
+
+            self._cover_movie = mv
+            self._cover_movie_buffer = buf
+            self._cover_full_pixmap = None
+            self.img_label.setMovie(mv)
+            mv.start()
+        except Exception:
+            self._render_placeholder()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_cover_pixmap()
         self._update_screenshot_pixmaps()
+        try:
+            mv = getattr(self, "_cover_movie", None)
+            if mv is not None:
+                mv.setScaledSize(self.img_label.size())
+        except Exception:
+            pass
 
     def _update_cover_pixmap(self):
         try:
+            if getattr(self, "_cover_movie", None) is not None:
+                return
             if not self._cover_full_pixmap or self._cover_full_pixmap.isNull():
                 return
             w = self.img_label.width()
@@ -891,6 +1281,10 @@ class GameDetailPanel(QWidget):
                 w = item.widget()
                 if w is not None:
                     try:
+                        if w is self.screenshots_empty_label:
+                            w.hide()
+                            w.setParent(self.screenshots_container)
+                            continue
                         w.setParent(None)
                         w.deleteLater()
                     except Exception:
@@ -910,10 +1304,17 @@ class GameDetailPanel(QWidget):
             cleaned = []
 
         if not cleaned:
-            self.screenshots_scroll.setVisible(False)
+            try:
+                self.screenshots_layout.addWidget(self.screenshots_empty_label)
+                self.screenshots_empty_label.show()
+            except Exception:
+                pass
             return
 
-        self.screenshots_scroll.setVisible(True)
+        try:
+            self.screenshots_empty_label.hide()
+        except Exception:
+            pass
 
         for u in cleaned:
             lbl = QLabel()
@@ -927,28 +1328,24 @@ class GameDetailPanel(QWidget):
 
             it = ImageFetcher(self.game['id'], u)
 
-            def _apply_img(_gid, img, target=lbl, url=u):
+            def _apply_img(_gid, img, _raw=b"", _fmt="", _is_animated=False, target=lbl, url=u):
                 try:
-                    pm = None
-                    try:
-                        if img and (not img.isNull()):
-                            pm = QPixmap.fromImage(img)
-                    except Exception:
-                        pm = None
+                    if not img or img.isNull():
+                        return
+                    pm = QPixmap.fromImage(img)
+                    if pm.isNull():
+                        return
+                    for entry in self._screenshot_items:
+                        if entry.get("label") is target:
+                            entry["pixmap"] = pm
+                            break
+                    self._update_screenshot_pixmaps()
+                except Exception:
+                    pass
 
-                    if pm and (not pm.isNull()):
-                        for entry in self._screenshot_items:
-                            if entry.get("label") is target:
-                                entry["pixmap"] = pm
-                                break
-                        self._update_screenshot_pixmaps()
-                    else:
-                        target.setText("No Image")
-                except RuntimeError:
-                    return
 
             it.finished.connect(_apply_img)
-            it.finished.connect(lambda _g, _img, t=it: self.main_window.active_threads.remove(t) if t in self.main_window.active_threads else None)
+            it.finished.connect(lambda _g, _img, _raw, _fmt, _is_animated, t=it: self.main_window.active_threads.remove(t) if t in self.main_window.active_threads else None)
             self.main_window.active_threads.append(it)
             self._screenshot_threads.append(it)
             it.start()
@@ -1165,7 +1562,12 @@ class GameDetailPanel(QWidget):
             msg = f"Permanently delete ALL files in:\n{self._local_rom_path}?"
             
         try:
-            if QMessageBox.question(self, "Uninstall — Wingosy", msg, QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            dlg = UninstallConfirmDialog(
+                "Uninstall — Wingosy",
+                msg,
+                parent=self,
+            )
+            if dlg.exec() == QDialog.Accepted:
                 try:
                     p = self._local_rom_path
                     if p.exists():
@@ -1174,10 +1576,20 @@ class GameDetailPanel(QWidget):
                         else:
                             os.remove(p)
                         self.main_window.log(f"🗑 {self.game.get('name')} uninstalled")
+                        self.game['_local_exists'] = False
                         self._update_button_states()
+                        try:
+                            self.refresh_badges_row()
+                        except Exception:
+                            pass
+                        try:
+                            if hasattr(self.main_window, 'library_tab') and self.main_window.library_tab:
+                                self.main_window.library_tab.update_game_local_status(self.game.get('id'), False)
+                        except Exception:
+                            pass
                         self.main_window.library_tab.apply_filters()
                 except Exception as e:
-                    QMessageBox.critical(self, "Error — Wingosy", str(e))
+                    StyledMessageBox.critical(self, "Error — Wingosy", str(e))
         finally:
             self._uninstall_dialog_open = False
             try:
@@ -1215,7 +1627,7 @@ class GameDetailPanel(QWidget):
 
             # 1. Check if already installed
             if extracted_dir.exists() and any(extracted_dir.rglob("*.exe")):
-                QMessageBox.information(
+                StyledMessageBox.information(
                     self, "Already Installed — Wingosy",
                     f"{self.game['name']} appears to already be installed at:\n{extracted_dir}\n\nUse the Play button to launch it."
                 )
@@ -1224,15 +1636,15 @@ class GameDetailPanel(QWidget):
 
             # 2. Check if archive exists
             if archive_path.exists():
-                reply = QMessageBox.question(
+                reply = StyledMessageBox.question(
                     self, "Archive Already Downloaded — Wingosy",
                     f"{rom_name} already exists in your Windows Games folder.\n\nWould you like to extract it now instead of downloading again?",
-                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                    QMessageBox.Yes
+                    StyledMessageBox.Yes | StyledMessageBox.No | StyledMessageBox.Cancel,
+                    StyledMessageBox.Yes
                 )
-                if reply == QMessageBox.Cancel:
+                if reply == StyledMessageBox.Cancel:
                     return
-                if reply == QMessageBox.Yes:
+                if reply == StyledMessageBox.Yes:
                     self._start_extraction(str(archive_path))
                     return
 
@@ -1249,7 +1661,7 @@ class GameDetailPanel(QWidget):
 
         self.extract_thread.progress.connect(lambda d, t: download_registry.update_progress(self.game['id'], d, t))
         self.extract_thread.finished.connect(self._on_extraction_finished)
-        self.extract_thread.error.connect(lambda msg: QMessageBox.critical(self, "Extraction Error", msg))
+        self.extract_thread.error.connect(lambda msg: StyledMessageBox.critical(self, "Extraction Error", msg))
 
         self.main_window.download_queue.add_download(self.game['name'], self.extract_thread, "extraction", self.game['id'])
         self.extract_thread.start()
@@ -1416,7 +1828,7 @@ class GameDetailPanel(QWidget):
     def play_game(self):
         local_rom = self._get_local_rom_path()
         if not local_rom or not local_rom.exists():
-            QMessageBox.warning(self, "Error — Wingosy", "Could not find the local ROM file. Please download it first.")
+            StyledMessageBox.warning(self, "Error — Wingosy", "Could not find the local ROM file. Please download it first.")
             return
             
         emu_data = None
@@ -1449,7 +1861,7 @@ class GameDetailPanel(QWidget):
                 )
 
         if not emu_data or (not emu_data.get("is_native") and (not emu_data.get("executable_path") or not os.path.exists(emu_data["executable_path"]))):
-            QMessageBox.warning(self, "Error — Wingosy", "No valid emulator configured.")
+            StyledMessageBox.warning(self, "Error — Wingosy", "No valid emulator configured.")
             return
             
         self.main_window.log(f"🎮 Preparing {self.game.get('name')}...")
@@ -1492,7 +1904,7 @@ class GameDetailPanel(QWidget):
                                 return # Launching happens after picking
                 
                 if not exe_to_launch:
-                    QMessageBox.warning(self, "Error — Wingosy", "No game executable found.")
+                    StyledMessageBox.warning(self, "Error — Wingosy", "No game executable found.")
                     return
 
                 self._launch_windows_exe(exe_to_launch)
@@ -1507,7 +1919,7 @@ class GameDetailPanel(QWidget):
                     if core_path.exists():
                         args = [exe_path, "-L", str(core_path), str(local_rom)]
                     else:
-                        if QMessageBox.question(self, "Error — Wingosy", f"Core {core_name} missing. Download?") == QMessageBox.Yes:
+                        if StyledMessageBox.question(self, "Error — Wingosy", f"Core {core_name} missing. Download?") == StyledMessageBox.Yes:
                             self.start_core_download(core_name, Path(exe_path).parent, platform)
                         return
                 else:
@@ -1528,7 +1940,7 @@ class GameDetailPanel(QWidget):
             if self.main_window.watcher:
                 QTimer.singleShot(0, lambda: self.main_window.watcher.track_session(proc, emu_data["name"], self.game, str(local_rom), exe_path, skip_pull=True))
         except Exception as e:
-            QMessageBox.critical(self, "Error — Wingosy", str(e))
+            StyledMessageBox.critical(self, "Error — Wingosy", str(e))
 
     def _launch_windows_exe(self, exe_path):
         self.main_window.log(f"🚀 Launching Windows Game: {os.path.basename(exe_path)}")
@@ -1555,7 +1967,7 @@ class GameDetailPanel(QWidget):
         
         t = CoreDownloadThread(core_name, emu_dir / "cores")
         t.progress.connect(lambda v, s: (pb.setValue(v), status.setText(f"Speed: {format_speed(s)}")))
-        t.finished.connect(lambda success, msg: (dlg.close(), self.play_game() if success else QMessageBox.critical(self, "Error — Wingosy", msg)))
+        t.finished.connect(lambda success, msg: (dlg.close(), self.play_game() if success else StyledMessageBox.critical(self, "Error — Wingosy", msg)))
         t.start()
         dlg.exec()
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QLabel, QPushButton, QTabWidget, QTextEdit, 
                              QApplication, QFileDialog, 
-                             QMessageBox, QDialog, QLineEdit, QDialogButtonBox, 
+                             QDialog, QLineEdit, QDialogButtonBox, 
                              QScrollArea, QFrame)
 from PySide6.QtGui import QIcon, QPixmap, QKeySequence, QShortcut, QDesktopServices
 from PySide6.QtCore import Qt, QSettings, Slot, Signal, QThread, QTimer, QEvent, QPoint, QRect, QUrl
@@ -18,7 +18,9 @@ from src.ui.threads import (ImageFetcher, BiosDownloader, DolphinDownloader,
                             DirectDownloader, GithubDownloader, ConflictResolveThread,
                             LocalDiscoveryWorker)
 from src.ui.widgets import get_resource_path, DownloadQueueWidget, format_speed, format_size
-from src.ui.dialogs import SetupDialog, WelcomeDialog, ConflictDialog
+from src.ui.dialogs.settings_helpers import WelcomeDialog
+from src.ui.dialogs.styled_messagebox import StyledMessageBox
+from src.ui.dialogs import ConflictDialog
 from src.ui.dialogs.emulator_editor import AssetPickerDialog
 from src.emulator_sources import EMULATOR_SOURCES
 from src.ui.tabs.library import LibraryTab
@@ -139,7 +141,7 @@ class WingosyMainWindow(QMainWindow):
 
     def _show_post_startup_dialogs(self):
         if self._pending_keyring_warning:
-            QMessageBox.warning(
+            StyledMessageBox.warning(
                 self,
                 "Credential Storage Warning",
                 "Your system's secure credential manager is unavailable.\n\n"
@@ -510,7 +512,7 @@ class WingosyMainWindow(QMainWindow):
             self.title_bar.set_activity("Building library view...")
         
         if res == "REAUTH_REQUIRED":
-            QMessageBox.warning(self, "Session Expired", 
+            StyledMessageBox.warning(self, "Session Expired", 
                 "Your session has expired. Please log in again.")
             self._on_tab_changed(3) # Settings
             self._emit_initial_library_ready(False)
@@ -894,8 +896,8 @@ class WingosyMainWindow(QMainWindow):
                     self.log(f"✨ BIOS saved to {p}")
                     if is_ps3_pup and emu_d.get("executable_path"):
                         # Offer to install
-                        res = QMessageBox.question(self, "Install PS3 Firmware", "PS3 Firmware downloaded. Would you like to launch RPCS3 to install it now?", QMessageBox.Yes | QMessageBox.No)
-                        if res == QMessageBox.Yes:
+                        res = StyledMessageBox.question(self, "Install PS3 Firmware", "PS3 Firmware downloaded. Would you like to launch RPCS3 to install it now?", StyledMessageBox.Yes | StyledMessageBox.No)
+                        if res == StyledMessageBox.Yes:
                             import subprocess
                             try:
                                 subprocess.Popen([emu_d["executable_path"], "--installfw", p])
@@ -974,7 +976,7 @@ class WingosyMainWindow(QMainWindow):
             
             if mode == "export":
                 if not os.path.exists(path):
-                    QMessageBox.warning(self, "Export Failed", f"Config path does not exist: {path}")
+                    StyledMessageBox.warning(self, "Export Failed", f"Config path does not exist: {path}")
                     return
                 
                 target_zip, _ = QFileDialog.getSaveFileName(self, f"Export {name} Config", f"{name}_config.zip", "ZIP Files (*.zip)")
@@ -1055,6 +1057,16 @@ class WingosyMainWindow(QMainWindow):
             self.watcher.notify_signal.connect(self.show_notification)
             if hasattr(self.watcher, 'playtime_updated_signal'):
                 self.watcher.playtime_updated_signal.connect(self._on_playtime_updated, Qt.QueuedConnection)
+            if hasattr(self.watcher, 'sync_cache_updated_signal'):
+                try:
+                    handler = getattr(self.library_tab, '_on_sync_cache_updated', None)
+                except Exception:
+                    handler = None
+                if handler:
+                    try:
+                        self.watcher.sync_cache_updated_signal.connect(handler, Qt.QueuedConnection)
+                    except Exception:
+                        pass
             self.watcher.start()
 
     @Slot(int, int)

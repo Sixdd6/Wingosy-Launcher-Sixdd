@@ -1,8 +1,10 @@
 import os
 from pathlib import Path
-from PySide6.QtWidgets import (QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QScrollArea, QFileDialog, QFrame)
+from PySide6.QtWidgets import (QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QScrollArea, QFileDialog, QFrame)
 from PySide6.QtCore import Qt, Signal, QThread, QTimer
 from PySide6.QtGui import QFontMetrics
+
+from src.ui.dialogs.styled_messagebox import StyledMessageBox
 
 class ConflictDialog(QDialog):
     choice_made = Signal(str)
@@ -13,38 +15,119 @@ class ConflictDialog(QDialog):
         self.setFixedSize(450, 200)
         self.result_mode = None
 
-        self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint | Qt.WindowTitleHint)
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._drag_pos = None
         
         self.setStyleSheet("""
-            QWidget {
+            #ConflictRoot {
                 background-color: #1a1a1a;
                 color: #ffffff;
+                border: 1px solid #2f2f2f;
+                border-radius: 10px;
             }
             QLabel {
                 color: #ffffff;
+                font-size: 12px;
             }
             QPushButton {
-                border-radius: 4px;
+                border-radius: 8px;
+                padding: 10px 12px;
+                min-height: 36px;
+                background: #2b2b2b;
+                border: 1px solid #3a3a3a;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #353535;
+                border-color: #4a4a4a;
+            }
+            QPushButton:pressed {
+                background: #242424;
+            }
+            QPushButton:focus {
+                border-color: #6b6b6b;
+            }
+            QPushButton#CloudBtn {
+                background: #1565c0;
+                border-color: #1d76da;
+            }
+            QPushButton#CloudBtn:hover {
+                background: #1a73d6;
+            }
+            QPushButton#LocalBtn {
+                background: #2e7d32;
+                border-color: #3b9a41;
+            }
+            QPushButton#LocalBtn:hover {
+                background: #35913a;
+            }
+            QPushButton#BothBtn {
+                background: #424242;
+                border-color: #565656;
+            }
+            QPushButton#BothBtn:hover {
+                background: #4b4b4b;
             }
         """)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+
+        root = QFrame(self)
+        root.setObjectName("ConflictRoot")
+        outer.addWidget(root)
+
+        layout = QVBoxLayout(root)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
         
-        layout.addWidget(QLabel(f"Conflict found for <b>{title}</b>. Which save would you like to use?"))
+        msg = QLabel(f"Conflict found for <b>{title}</b>. Which save would you like to use?")
+        msg.setWordWrap(True)
+        layout.addWidget(msg)
         layout.addStretch()
         
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
 
-        for mode, text in [("cloud", "☁️ Use Cloud"), ("local", "💾 Keep Local"), ("both", "📁 Keep Both")]:
-            btn = QPushButton(text)
-            btn.clicked.connect(lambda checked, m=mode: self.finish(m))
-            btn_layout.addWidget(btn)
+        self.cloud_btn = QPushButton("☁️ Use Cloud")
+        self.cloud_btn.setObjectName("CloudBtn")
+        self.cloud_btn.clicked.connect(lambda checked=False: self.finish("cloud"))
+        btn_layout.addWidget(self.cloud_btn)
+
+        self.local_btn = QPushButton("💾 Keep Local")
+        self.local_btn.setObjectName("LocalBtn")
+        self.local_btn.clicked.connect(lambda checked=False: self.finish("local"))
+        btn_layout.addWidget(self.local_btn)
+
+        self.both_btn = QPushButton("📁 Keep Both")
+        self.both_btn.setObjectName("BothBtn")
+        self.both_btn.clicked.connect(lambda checked=False: self.finish("both"))
+        btn_layout.addWidget(self.both_btn)
             
         layout.addLayout(btn_layout)
+
+        self.cloud_btn.setDefault(True)
+        self.cloud_btn.setAutoDefault(True)
         
         QTimer.singleShot(0, self._apply_dark_frame)
         QTimer.singleShot(50, self._center_on_parent)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos is not None and (event.buttons() & Qt.LeftButton):
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
 
     def _apply_dark_frame(self):
         import sys, ctypes
@@ -169,7 +252,7 @@ class WikiSuggestionsDialog(QWidget):
             p = p.parent
         directory = QFileDialog.getExistingDirectory(self, "Select Save Folder — Wingosy", str(p))
         if directory:
-            if QMessageBox.question(self, "Confirm — Wingosy", f"Use this folder?\n{directory}") == QMessageBox.Yes:
+            if StyledMessageBox.question(self, "Confirm — Wingosy", f"Use this folder?\n{directory}", StyledMessageBox.Yes | StyledMessageBox.No) == StyledMessageBox.Yes:
                 self.selected_path = directory
                 self.accepted_path.emit(directory)
                 self.close()
@@ -258,9 +341,12 @@ class SaveSyncSetupDialog(QWidget):
         self.move(x, y)
 
     def get_suggestions(self):
-        self.loading_dlg = QMessageBox(self)
-        self.loading_dlg.setWindowTitle("Fetching — Wingosy")
-        self.loading_dlg.setText("Querying PCGamingWiki...")
+        self.loading_dlg = StyledMessageBox(
+            self,
+            "Fetching — Wingosy",
+            "Querying PCGamingWiki...",
+            buttons=0,
+        )
         self.loading_dlg.show()
         
         self.btn_wiki.setEnabled(False)
@@ -285,7 +371,7 @@ class SaveSyncSetupDialog(QWidget):
         self.btn_wiki.setEnabled(True)
         
         if not res:
-            QMessageBox.information(self, "No Suggestions — Wingosy", "None found. Browse manually.")
+            StyledMessageBox.information(self, "No Suggestions — Wingosy", "None found. Browse manually.")
             self.browse_manually()
             return
             
@@ -308,7 +394,7 @@ class SaveSyncSetupDialog(QWidget):
         if self.wiki_timeout: self.wiki_timeout.stop()
         self.loading_dlg.close()
         self.btn_wiki.setEnabled(True)
-        QMessageBox.warning(self, "Error — Wingosy", "Failed to reach wiki.")
+        StyledMessageBox.warning(self, "Error — Wingosy", "Failed to reach wiki.")
         
     def browse_manually(self):
         directory = QFileDialog.getExistingDirectory(self, "Select Save Folder — Wingosy")
@@ -457,7 +543,7 @@ class CloudSaveManagerDialog(QWidget):
 
     def restore_version(self, item):
         msg = f"Restore this {item['_type']}?\n\nYour current local save will be backed up to .bak first."
-        if QMessageBox.question(self, "Restore Version — Wingosy", msg) != QMessageBox.Yes:
+        if StyledMessageBox.question(self, "Restore Version — Wingosy", msg, StyledMessageBox.Yes | StyledMessageBox.No) != StyledMessageBox.Yes:
             return
 
         # Use extraction/restore logic from GameDetailPanel? 
@@ -472,7 +558,7 @@ class CloudSaveManagerDialog(QWidget):
         if not emu: emu = next((e for e in all_emus if e["id"] == "retroarch"), None)
 
         if not emu:
-            QMessageBox.warning(self, "Error", "Could not determine emulator for restoration.")
+            StyledMessageBox.warning(self, "Error", "Could not determine emulator for restoration.")
             return
 
         strategy = get_strategy(self.config, emu)
@@ -491,18 +577,18 @@ class CloudSaveManagerDialog(QWidget):
                 ra_dir = Path(emu['executable_path']).parent
                 local_path = str(ra_dir / "saves")
             else:
-                QMessageBox.warning(self, "Error", "Could not determine local save path.")
+                StyledMessageBox.warning(self, "Error", "Could not determine local save path.")
                 return
 
         # Start restoration
         from src.ui.threads import ConflictResolveThread
         # Use ConflictResolveThread as a "Force Pull" thread
         self.rt = ConflictResolveThread(self.main_window.watcher, self.game['id'], self.game['name'], item, local_path, is_folder)
-        self.rt.finished.connect(lambda ok: QMessageBox.information(self, "Done", "Save restored successfully!") if ok else QMessageBox.warning(self, "Failed", "Restoration failed."))
+        self.rt.finished.connect(lambda ok: StyledMessageBox.information(self, "Done", "Save restored successfully!") if ok else StyledMessageBox.warning(self, "Failed", "Restoration failed."))
         self.rt.start()
 
     def delete_version(self, item):
-        if QMessageBox.question(self, "Delete version?", "Delete this version from the cloud permanently?") != QMessageBox.Yes:
+        if StyledMessageBox.question(self, "Delete version?", "Delete this version from the cloud permanently?", StyledMessageBox.Yes | StyledMessageBox.No) != StyledMessageBox.Yes:
             return
         
         success = False
@@ -514,7 +600,7 @@ class CloudSaveManagerDialog(QWidget):
         if success:
             self.load_history()
         else:
-            QMessageBox.warning(self, "Error", "Delete failed.")
+            StyledMessageBox.warning(self, "Error", "Delete failed.")
 
 from src import emulators
 from src.save_strategies import get_strategy
