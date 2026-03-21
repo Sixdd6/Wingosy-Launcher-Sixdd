@@ -1,7 +1,6 @@
 import os
 import shlex
 import subprocess
-from pathlib import Path
 import logging
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,   
                              QPushButton, QScrollArea, QFormLayout,
@@ -15,36 +14,6 @@ from src.ui.threads import (DirectDownloader, DolphinDownloader,
 from src.ui.widgets import format_speed, get_resource_path
 from src import emulators
 from src.ui.dialogs.styled_messagebox import StyledMessageBox
-
-def _get_check_icon_path():
-    import os
-    from pathlib import Path
-    from PySide6.QtGui import QPixmap, QPainter, QPen, QColor
-    from PySide6.QtCore import Qt, QPointF
-    
-    check_path = Path.home() / ".wingosy" / "check.png"
-    
-    if not check_path.exists():
-        check_path.parent.mkdir(parents=True, exist_ok=True)
-        px = QPixmap(14, 14)
-        px.fill(QColor(0, 0, 0, 0))
-        painter = QPainter(px)
-        painter.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(QColor("#ffffff"))
-        pen.setWidth(2)
-        pen.setCapStyle(Qt.RoundCap)
-        pen.setJoinStyle(Qt.RoundJoin)
-        painter.setPen(pen)
-        # Draw checkmark: ✓
-        painter.drawPolyline([
-            QPointF(2, 7),
-            QPointF(5, 10),
-            QPointF(12, 3)
-        ])
-        painter.end()
-        px.save(str(check_path))
-    
-    return str(check_path).replace("\\", "/")
 
 class EmulatorEditDialog(QDialog):
     def __init__(self, emu_data=None, parent=None):
@@ -480,11 +449,11 @@ class SyncSettingsWidget(QWidget):
 
         for emu in emu_data_list:
             row = QWidget()
-            row.setStyleSheet(f"""
+            row.setStyleSheet("""
                 QWidget {{ background: #252525; border-radius: 5px; margin: 2px; }}
                 QCheckBox {{ color: #cccccc; font-size: 11px; spacing: 8px; border: none; }}
                 QCheckBox::indicator {{ width: 16px; height: 16px; border: 1px solid #555; border-radius: 3px; background: #1a1a1a; }}
-                QCheckBox::indicator:checked {{ background: #0d6efd; border: 1px solid #0d6efd; image: url("{_get_check_icon_path()}"); }}
+                QCheckBox::indicator:checked {{ background: #0d6efd; border: 1px solid #0d6efd; }}
                 QCheckBox::indicator:hover {{ border: 1px solid #0d6efd; }}
             """)
             rl = QHBoxLayout(row)

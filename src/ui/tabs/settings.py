@@ -13,36 +13,6 @@ from PySide6.QtCore import Qt, QTimer
 from src.ui.threads import UpdaterThread, SelfUpdateThread
 from src.ui.dialogs.styled_messagebox import StyledMessageBox
 
-def _get_check_icon_path():
-    import os
-    from pathlib import Path
-    from PySide6.QtGui import QPixmap, QPainter, QPen, QColor
-    from PySide6.QtCore import Qt, QPointF
-    
-    check_path = Path.home() / ".wingosy" / "check.png"
-    
-    if not check_path.exists():
-        check_path.parent.mkdir(parents=True, exist_ok=True)
-        px = QPixmap(14, 14)
-        px.fill(QColor(0, 0, 0, 0))
-        painter = QPainter(px)
-        painter.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(QColor("#ffffff"))
-        pen.setWidth(2)
-        pen.setCapStyle(Qt.RoundCap)
-        pen.setJoinStyle(Qt.RoundJoin)
-        painter.setPen(pen)
-        # Draw checkmark: 
-        painter.drawPolyline([
-            QPointF(2, 7),
-            QPointF(5, 10),
-            QPointF(12, 3)
-        ])
-        painter.end()
-        px.save(str(check_path))
-    
-    return str(check_path).replace("\\", "/")
-
 class SettingsTab(QWidget):
     def __init__(self, main_window):
         super().__init__()
@@ -160,8 +130,7 @@ class SettingsTab(QWidget):
                 }
             """)
         elif isinstance(widget, QCheckBox):
-            check_path = _get_check_icon_path()
-            widget.setStyleSheet(f"""
+            widget.setStyleSheet("""
                 QCheckBox {{
                     color: #cccccc;
                     font-size: 11px;
@@ -178,7 +147,6 @@ class SettingsTab(QWidget):
                 QCheckBox::indicator:checked {{
                     background: #0d6efd;
                     border: 1px solid #0d6efd;
-                    image: url("{check_path}");
                 }}
                 QCheckBox::indicator:hover {{
                     border: 1px solid #0d6efd;

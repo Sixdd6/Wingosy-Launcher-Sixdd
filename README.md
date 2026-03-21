@@ -61,7 +61,7 @@ python -m pytest tests/ -v
 
 ```bash
 pip install pyinstaller
-pyinstaller wingosy.spec
+pyinstaller --noconsole --onefile --name Wingosy --icon "assets/icon.png" --add-data "assets;assets" --hidden-import sqlite3 --hidden-import src.ui --hidden-import src.ui.main_window --hidden-import src.ui.dialogs --hidden-import src.ui.threads --hidden-import src.ui.widgets --hidden-import src.ui.tabs --hidden-import src.ui.tabs.library --hidden-import src.ui.tabs.emulators main.py
 ```
 
 ## License
