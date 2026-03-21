@@ -200,17 +200,23 @@ class WindowsGameSettingsDialog(QWidget):
         if not p:
             return None
         if isinstance(p, Path) and p.exists() and p.is_file():
-            return p.parent
+            return p
         if isinstance(p, Path) and p.exists() and p.is_dir():
             return p
         return None
 
     def _find_exes(self, folder):
         try:
-            exes = [
-                str(p) for p in folder.rglob("*.exe")
-                if not any(e.lower() in str(p).lower() for e in EXCLUDED_EXES)
-            ]
+            exes = []
+            if isinstance(folder, Path) and folder.exists() and folder.is_file():
+                if folder.suffix.lower() in (".exe", ".bat", ".cmd"):
+                    exes = [str(folder)]
+            else:
+                for pattern in ("*.exe", "*.bat", "*.cmd"):
+                    exes.extend(
+                        str(p) for p in folder.rglob(pattern)
+                        if not any(e.lower() in str(p).lower() for e in EXCLUDED_EXES)
+                    )
         except Exception:
             exes = []
         exes.sort(key=lambda p: (os.path.basename(p).lower(), p.lower()))
@@ -299,7 +305,7 @@ class WindowsGameSettingsDialog(QWidget):
             p.show()
                 
     def browse_exe(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Select Executable — Wingosy", "", "Executables (*.exe)")
+        p, _ = QFileDialog.getOpenFileName(self, "Select Executable — Wingosy", "", "Executables (*.exe *.bat *.cmd)")
         if p:
             self.default_exe = p
             self.update_ui()

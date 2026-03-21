@@ -214,7 +214,7 @@ class GameDetailPanel(QWidget):
         self.companies_label.setStyleSheet("font-size: 12pt; margin-bottom: 2px; background: transparent;")
         self.right_column.addWidget(self.companies_label)
 
-        self.players_label = QLabel("<b>Players:</b> Loading...")
+        self.players_label = QLabel("<b>Max Players:</b> Loading...")
         self.players_label.setStyleSheet("font-size: 12pt; margin-bottom: 2px; background: transparent;")
         self.right_column.addWidget(self.players_label)
 
@@ -232,6 +232,20 @@ class GameDetailPanel(QWidget):
         self.desc_label.setStyleSheet("color: #ccc; font-size: 11pt; line-height: 1.4; background: transparent;")
         self.desc_scroll.setWidget(self.desc_label)
         self.right_column.addWidget(self.desc_scroll, 1)
+
+        self._screenshot_threads = []
+        self._screenshot_items = []
+        self.screenshots_scroll = QScrollArea()
+        self.screenshots_scroll.setWidgetResizable(True)
+        self.screenshots_scroll.setStyleSheet("background: transparent; border: none;")
+        self.screenshots_scroll.setFixedWidth(260)
+
+        self.screenshots_container = QWidget()
+        self.screenshots_layout = QVBoxLayout(self.screenshots_container)
+        self.screenshots_layout.setContentsMargins(0, 0, 0, 0)
+        self.screenshots_layout.setSpacing(10)
+        self.screenshots_scroll.setWidget(self.screenshots_container)
+        self.screenshots_scroll.setVisible(False)
 
         self.pbar = QProgressBar()
         self.pbar.setVisible(False)
@@ -291,6 +305,8 @@ class GameDetailPanel(QWidget):
 
         self.right_column.addLayout(self.actions_layout)
         sub_layout.addLayout(self.right_column, 1)
+
+        sub_layout.addWidget(self.screenshots_scroll, 0)
         content_layout.addLayout(sub_layout)
 
         close_btn = QPushButton("Close")
@@ -520,7 +536,7 @@ class GameDetailPanel(QWidget):
         if self.game.get('_local_exists') is False:
             exists = False
         elif self._is_windows and p and p.is_dir():
-            exists = any(p.rglob("*.exe"))
+            exists = any(p.rglob("*.exe")) or any(p.rglob("*.bat")) or any(p.rglob("*.cmd"))
         else:
             exists = p and p.exists() if p else False
                 
@@ -575,6 +591,7 @@ class GameDetailPanel(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_cover_pixmap()
+        self._update_screenshot_pixmaps()
 
     def _update_cover_pixmap(self):
         try:
@@ -729,9 +746,20 @@ class GameDetailPanel(QWidget):
 
         # Cover URL fallback: LaunchBox provides a list of images
         cover_url = None
+        screenshot_urls = []
         try:
             imgs = md.get("images") or rom.get("images")
             if isinstance(imgs, list):
+                for i in imgs:
+                    if not isinstance(i, dict):
+                        continue
+                    t = str(i.get("type") or "")
+                    u = i.get("url")
+                    if not u:
+                        continue
+                    if "screenshot" in t.lower():
+                        screenshot_urls.append(u)
+
                 preferred_types = [
                     "Box - Front",
                     "Box - 3D",
@@ -752,6 +780,25 @@ class GameDetailPanel(QWidget):
         except Exception:
             cover_url = None
 
+        try:
+            seen = set()
+            out = []
+            for u in screenshot_urls:
+                if not isinstance(u, str):
+                    continue
+                s = u.strip()
+                if not s:
+                    continue
+                if s in seen:
+                    continue
+                seen.add(s)
+                out.append(s)
+                if len(out) >= 20:
+                    break
+            screenshot_urls = out
+        except Exception:
+            screenshot_urls = []
+
         return {
             "title": title,
             "summary": summary,
@@ -763,6 +810,7 @@ class GameDetailPanel(QWidget):
             "players": players_val,
             "playtime": playtime_val,
             "cover_url": cover_url,
+            "screenshot_urls": screenshot_urls,
         }
 
     def _apply_resolved_metadata(self, rom):
@@ -787,8 +835,13 @@ class GameDetailPanel(QWidget):
         self.genres_label.setText(f"<b>Genres:</b> {genres_text}")
         self.rating_label.setText(f"<b>Rating:</b> {rating_text}")
         self.companies_label.setText(f"<b>Developer/Publisher:</b> {companies_text}")
-        self.players_label.setText(f"<b>Players:</b> {players_text}")
+        self.players_label.setText(f"<b>Max Players:</b> {players_text}")
         self.playtime_label.setText(f"<b>Playtime:</b> {playtime_text}")
+
+        try:
+            self._set_screenshots(resolved.get("screenshot_urls") or [])
+        except Exception:
+            pass
 
         try:
             summary = resolved.get("summary")
@@ -816,6 +869,106 @@ class GameDetailPanel(QWidget):
                 self._start_image_fetch()
         except Exception:
             pass
+
+    def _clear_screenshots(self):
+        try:
+            for t in getattr(self, "_screenshot_threads", []):
+                try:
+                    t.requestInterruption()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        self._screenshot_threads = []
+        self._screenshot_items = []
+
+        try:
+            for i in reversed(range(self.screenshots_layout.count())):
+                item = self.screenshots_layout.takeAt(i)
+                if not item:
+                    continue
+                w = item.widget()
+                if w is not None:
+                    try:
+                        w.setParent(None)
+                        w.deleteLater()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _set_screenshots(self, urls):
+        self._clear_screenshots()
+
+        cleaned = []
+        try:
+            for u in (urls or []):
+                if isinstance(u, str) and u.strip():
+                    cleaned.append(u.strip())
+        except Exception:
+            cleaned = []
+
+        if not cleaned:
+            self.screenshots_scroll.setVisible(False)
+            return
+
+        self.screenshots_scroll.setVisible(True)
+
+        for u in cleaned:
+            lbl = QLabel()
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setMinimumHeight(120)
+            lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            lbl.setStyleSheet("background: #111; border-radius: 6px;")
+            self.screenshots_layout.addWidget(lbl)
+
+            self._screenshot_items.append({"label": lbl, "pixmap": None})
+
+            it = ImageFetcher(self.game['id'], u)
+
+            def _apply_img(_gid, img, target=lbl, url=u):
+                try:
+                    pm = None
+                    try:
+                        if img and (not img.isNull()):
+                            pm = QPixmap.fromImage(img)
+                    except Exception:
+                        pm = None
+
+                    if pm and (not pm.isNull()):
+                        for entry in self._screenshot_items:
+                            if entry.get("label") is target:
+                                entry["pixmap"] = pm
+                                break
+                        self._update_screenshot_pixmaps()
+                    else:
+                        target.setText("No Image")
+                except RuntimeError:
+                    return
+
+            it.finished.connect(_apply_img)
+            it.finished.connect(lambda _g, _img, t=it: self.main_window.active_threads.remove(t) if t in self.main_window.active_threads else None)
+            self.main_window.active_threads.append(it)
+            self._screenshot_threads.append(it)
+            it.start()
+
+        self.screenshots_layout.addStretch(1)
+
+    def _update_screenshot_pixmaps(self):
+        try:
+            w = max(1, self.screenshots_scroll.viewport().width() - 8)
+            for entry in getattr(self, "_screenshot_items", []):
+                lbl = entry.get("label")
+                pm = entry.get("pixmap")
+                if (not lbl) or (not pm) or pm.isNull():
+                    continue
+
+                h = max(1, int(w * 9 / 16))
+                lbl.setFixedHeight(h)
+                lbl.setPixmap(pm.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        except RuntimeError:
+            return
 
     def _get_cached_playtime_seconds(self, rom_id):
         if rom_id is None:
@@ -925,16 +1078,30 @@ class GameDetailPanel(QWidget):
                 n = int(v)
                 if n <= 0:
                     return "Unknown"
+                if n == 1:
+                    return "Single-Player"
                 return str(n)
             if isinstance(v, str):
                 s = v.strip()
+                if s == "1":
+                    return "Single-Player"
                 return s if s else "Unknown"
             if isinstance(v, dict):
                 mn = v.get("min") or v.get("min_players")
                 mx = v.get("max") or v.get("max_players")
                 if mn and mx:
+                    try:
+                        if int(mn) == 1 and int(mx) == 1:
+                            return "Single-Player"
+                    except Exception:
+                        pass
                     return f"{mn}-{mx}"
                 if mx:
+                    try:
+                        if int(mx) == 1:
+                            return "Single-Player"
+                    except Exception:
+                        pass
                     return str(mx)
             return str(v)
         except Exception:
@@ -1307,7 +1474,12 @@ class GameDetailPanel(QWidget):
                     if rom and win_dir:
                         folder = Path(win_dir) / Path(rom).stem
                         if folder.exists():
-                            exes = [str(p) for p in folder.rglob("*.exe") if not any(ex_name.lower() in str(p).lower() for ex_name in EXCLUDED_EXES)]
+                            exes = []
+                            for pattern in ("*.exe", "*.bat", "*.cmd"):
+                                exes.extend(
+                                    str(p) for p in folder.rglob(pattern)
+                                    if not any(ex_name.lower() in str(p).lower() for ex_name in EXCLUDED_EXES)
+                                )
                             if len(exes) == 1:
                                 exe_to_launch = exes[0]
                             elif len(exes) > 1:
@@ -1360,7 +1532,11 @@ class GameDetailPanel(QWidget):
 
     def _launch_windows_exe(self, exe_path):
         self.main_window.log(f"🚀 Launching Windows Game: {os.path.basename(exe_path)}")
-        proc = subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
+        ext = os.path.splitext(exe_path)[1].lower()
+        if ext in (".bat", ".cmd"):
+            proc = subprocess.Popen(["cmd.exe", "/c", exe_path], cwd=os.path.dirname(exe_path))
+        else:
+            proc = subprocess.Popen([exe_path], cwd=os.path.dirname(exe_path))
         if self.main_window.watcher:
             self.main_window.watcher.track_session(proc, "Windows", self.game, exe_path, exe_path, skip_pull=True)
 

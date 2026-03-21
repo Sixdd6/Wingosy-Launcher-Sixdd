@@ -8,10 +8,10 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QLineEdit, QScrollArea, QGridLayout,
                              QComboBox, QSizePolicy, QAbstractItemView, QGraphicsDropShadowEffect, QStackedWidget)
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QPixmap, QImage, QColor
+from PySide6.QtGui import QPixmap, QImage, QColor, QFontMetrics
 
 from src.ui.threads import ImageFetcher
-from src.ui.widgets import format_speed, elide_text
+from src.ui.widgets import format_speed
 from src.platforms import RETROARCH_PLATFORMS, platform_matches
 from src import emulators, download_registry
 
@@ -114,10 +114,14 @@ class GameCard(QWidget):
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(4)
+
+        self._cover_title_spacing = 12
 
         self.img_label = QLabel()
         self.img_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.img_label)
+        layout.addSpacing(self._cover_title_spacing)
 
         self._apply_pixmap_retries = 0
 
@@ -160,7 +164,7 @@ class GameCard(QWidget):
         self.title_label.setAlignment(Qt.AlignCenter)
         self.title_label.setStyleSheet("color: white; font-weight: bold; border: none;")
         self.title_label.setWordWrap(False)
-        self.title_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.title_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         
         display_name = game.get('name', 'Unknown')
         fs_name = game.get('fs_name', '')
@@ -169,7 +173,8 @@ class GameCard(QWidget):
             disc_num = disc_match.group(2)
             display_name = f"[D{disc_num}] {display_name}"
             
-        self.title_label.setText(elide_text(display_name))   
+        self._full_title = display_name
+        self.title_label.setText(display_name)
         self.title_label.setToolTip(display_name)
         layout.addWidget(self.title_label)
         self.disc_label = None
@@ -180,6 +185,17 @@ class GameCard(QWidget):
 
         # Listen to registry for downloads/extractions
         download_registry.add_listener(str(self.game['id']), self.on_registry_update)
+
+    def update_title_width(self, available_width):
+        try:
+            max_w = max(1, int(available_width))
+            self.title_label.setMaximumWidth(max_w)
+            self.title_label.setFixedWidth(max_w)
+            fm = QFontMetrics(self.title_label.font())
+            full = getattr(self, "_full_title", "")
+            self.title_label.setText(fm.elidedText(full, Qt.ElideRight, max_w))
+        except Exception:
+            return
 
     def on_registry_update(self, rom_id, rtype, current, total, speed=0):
         if rtype == "done":
@@ -386,7 +402,9 @@ class LibraryTab(QWidget):
         filter_layout.addWidget(QLabel("Search:"))
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Filter games (Ctrl+F)...")    
-        self.search_input.textChanged.connect(self.apply_filters)
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.textChanged.connect(self._on_search_text_changed)
+        self.search_input.returnPressed.connect(self.apply_filters)
         filter_layout.addWidget(self.search_input)
 
         filter_layout.addWidget(QLabel("Platform:"))
@@ -663,6 +681,8 @@ class LibraryTab(QWidget):
             for card in self._all_cards:
                 img_w = max(1, w - 10)
                 title_h = 30
+                gap_h = int(getattr(card, "_cover_title_spacing", 5))
+                margins_h = 10
 
                 if card._full_pixmap and not card._full_pixmap.isNull() and card._full_pixmap.width() > 0:
                     ratio = card._full_pixmap.height() / card._full_pixmap.width()
@@ -670,7 +690,7 @@ class LibraryTab(QWidget):
                 else:
                     img_h = max(1, int(img_w * 1.5))
 
-                card.setFixedSize(w, img_h + title_h)
+                card.setFixedSize(w, img_h + title_h + gap_h + margins_h)
                 card.img_label.setFixedSize(img_w, img_h)
                 if card._full_pixmap and not card._full_pixmap.isNull():
                     key = (img_w, img_h)
@@ -686,7 +706,7 @@ class LibraryTab(QWidget):
                         except Exception:
                             pass
                     card.img_label.setPixmap(cached)
-                card.title_label.setFixedWidth(w - 10)
+                card.update_title_width(w - 10)
         finally:
             self.grid_widget.setUpdatesEnabled(True)
 
@@ -728,6 +748,10 @@ class LibraryTab(QWidget):
     def _set_install_filter(self, filter_id):
         self.current_install_filter = filter_id
         self.apply_filters()
+
+    def _on_search_text_changed(self, text):
+        if not text:
+            self.apply_filters()
 
     def _on_platform_changed(self, text):
         self._platform_selection = text or "All Platforms"
@@ -1056,9 +1080,10 @@ class LibraryTab(QWidget):
                     img_w = max(1, card_w - 10)
                     title_h = 30
                     img_h = max(1, int(img_w * 1.5))
-                    card.setFixedSize(card_w, img_h + title_h)
+                    gap_h = 5
+                    card.setFixedSize(card_w, img_h + gap_h + title_h)
                     card.img_label.setFixedSize(img_w, img_h)
-                    card.title_label.setFixedWidth(card_w - 10)
+                    card.update_title_width(img_w)
                     self.grid_layout.addWidget(card, row, col)
                     self._all_cards.append(card)
                 except (RuntimeError, AttributeError):

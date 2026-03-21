@@ -331,6 +331,7 @@ def main():
     
     sys.exit(app.exec())
 
+
 if __name__ == "__main__":
     try:
         logging.info("Calling main()")
