@@ -168,6 +168,7 @@ class GameCard(QWidget):
         self.game, self.client, self.config, self.sync_cache = game, client, config, sync_cache
         self._selected = False
         self._badge_render_state = {}
+        self._badge_style_radius = None
         
         self.update_style()
 
@@ -176,9 +177,15 @@ class GameCard(QWidget):
         layout.setSpacing(4)
 
         self._cover_title_spacing = 12
+        self._badge_layout_force = False
+        self._badge_layout_timer = QTimer(self)
+        self._badge_layout_timer.setSingleShot(True)
+        self._badge_layout_timer.setInterval(0)
+        self._badge_layout_timer.timeout.connect(self._flush_badge_layout)
 
         self.img_label = QLabel()
         self.img_label.setAlignment(Qt.AlignCenter)
+        self.img_label.installEventFilter(self)
         layout.addWidget(self.img_label)
         layout.addSpacing(self._cover_title_spacing)
 
@@ -291,17 +298,48 @@ class GameCard(QWidget):
 
     def resizeEvent(self, event):
         try:
-            self._update_badge_layout()
+            self._schedule_badge_layout()
         except Exception:
             pass
         super().resizeEvent(event)
 
     def showEvent(self, event):
         try:
-            self._update_badge_layout(force=True)
+            self._schedule_badge_layout(force=True)
         except Exception:
             pass
         super().showEvent(event)
+
+    def eventFilter(self, obj, event):
+        try:
+            if obj is self.img_label and event.type() in (
+                QEvent.Type.Resize,
+                QEvent.Type.Move,
+                QEvent.Type.Show,
+            ):
+                self._schedule_badge_layout()
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+    def _schedule_badge_layout(self, force=False):
+        try:
+            self._badge_layout_force = bool(self._badge_layout_force or force)
+            if not self._badge_layout_timer.isActive():
+                self._badge_layout_timer.start()
+        except Exception:
+            try:
+                self._update_badge_layout(force=force)
+            except Exception:
+                pass
+
+    def _flush_badge_layout(self):
+        try:
+            force = bool(self._badge_layout_force)
+            self._badge_layout_force = False
+            self._update_badge_layout(force=force)
+        except Exception:
+            return
 
     def _compute_badge_metrics(self):
         try:
@@ -320,11 +358,36 @@ class GameCard(QWidget):
         x = pad_px
         y = pad_px
 
+        try:
+            label_x = int(self.img_label.x())
+            label_y = int(self.img_label.y())
+            label_w = int(self.img_label.width() or 0)
+            label_h = int(self.img_label.height() or 0)
+
+            pix = self.img_label.pixmap()
+            if pix and (not pix.isNull()) and label_w > 0 and label_h > 0:
+                try:
+                    dpr = float(pix.devicePixelRatio()) or 1.0
+                except Exception:
+                    dpr = 1.0
+                pix_w = max(1, int(round(pix.width() / dpr)))
+                pix_h = max(1, int(round(pix.height() / dpr)))
+                draw_w = min(label_w, pix_w)
+                draw_h = min(label_h, pix_h)
+                x = label_x + max(0, (label_w - draw_w) // 2) + pad_px
+                y = label_y + max(0, (label_h - draw_h) // 2) + pad_px
+            else:
+                x = label_x + pad_px
+                y = label_y + pad_px
+        except Exception:
+            x = pad_px
+            y = pad_px
+
         # Installed badge
         if hasattr(self, 'local_indicator'):
             try:
                 if self.local_indicator.isVisible():
-                    self._apply_badge_geometry(self.local_indicator, x, y, badge_px)
+                    self._apply_badge_geometry(self.local_indicator, x, y, badge_px, force=force)
                     self._apply_badge_icon(self.local_indicator, icon_px, force=force)
                     x += badge_px + gap_px
             except Exception:
@@ -334,7 +397,7 @@ class GameCard(QWidget):
         if hasattr(self, 'cloud_indicator'):
             try:
                 if self.cloud_indicator.isVisible():
-                    self._apply_badge_geometry(self.cloud_indicator, x, y, badge_px)
+                    self._apply_badge_geometry(self.cloud_indicator, x, y, badge_px, force=force)
                     self._apply_badge_icon(self.cloud_indicator, icon_px, force=force)
             except Exception:
                 pass
@@ -342,17 +405,28 @@ class GameCard(QWidget):
         # Update rounded corners to match computed size
         try:
             r = max(6, badge_px // 2)
-            if hasattr(self, 'local_indicator'):
-                self.local_indicator.setStyleSheet(f"background-color: #4caf50; border-radius: {r}px;")
-            if hasattr(self, 'cloud_indicator'):
-                self.cloud_indicator.setStyleSheet(f"background-color: #1565c0; border-radius: {r}px;")
+            if force or (self._badge_style_radius != r):
+                if hasattr(self, 'local_indicator'):
+                    self.local_indicator.setStyleSheet(f"background-color: #4caf50; border-radius: {r}px;")
+                if hasattr(self, 'cloud_indicator'):
+                    self.cloud_indicator.setStyleSheet(f"background-color: #1565c0; border-radius: {r}px;")
+                self._badge_style_radius = r
         except Exception:
             pass
 
-    def _apply_badge_geometry(self, w, x, y, size):
+    def _apply_badge_geometry(self, w, x, y, size, force=False):
         try:
-            w.setFixedSize(int(size), int(size))
-            w.move(int(x), int(y))
+            xi = int(x)
+            yi = int(y)
+            si = int(size)
+            target = (xi, yi, si)
+            if (not force) and w.property("_badge_geo") == target:
+                return
+            if w.width() != si or w.height() != si:
+                w.setFixedSize(si, si)
+            if w.x() != xi or w.y() != yi:
+                w.move(xi, yi)
+            w.setProperty("_badge_geo", target)
         except Exception:
             return
 
@@ -442,6 +516,10 @@ class GameCard(QWidget):
             except Exception:
                 pass
             self.img_label.setPixmap(pixmap)
+            try:
+                self._schedule_badge_layout(force=True)
+            except Exception:
+                pass
             return None
         self.fetcher = ImageFetcher(self.game['id'], url)
         fetcher = self.fetcher
@@ -461,6 +539,10 @@ class GameCard(QWidget):
                 self._full_pixmap = ph
                 self._scaled_pixmap_cache.clear()
                 self.img_label.setPixmap(ph)
+                try:
+                    self._schedule_badge_layout(force=True)
+                except Exception:
+                    pass
             else:
                 self._full_image = image
                 self._full_pixmap = None
@@ -511,6 +593,10 @@ class GameCard(QWidget):
                     )
                 self._scaled_pixmap_cache[key] = cached
             self.img_label.setPixmap(cached)
+            try:
+                self._schedule_badge_layout(force=True)
+            except Exception:
+                pass
         except Exception:
             return
 
