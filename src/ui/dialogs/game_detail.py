@@ -406,8 +406,12 @@ class GameDetailPanel(QWidget):
         self.right_column.addWidget(self.players_label)
 
         self.playtime_label = QLabel("<b>Playtime:</b> Loading...")
-        self.playtime_label.setStyleSheet("font-size: 12pt; margin-bottom: 8px; background: transparent;")
+        self.playtime_label.setStyleSheet("font-size: 12pt; margin-bottom: 2px; background: transparent;")
         self.right_column.addWidget(self.playtime_label)
+
+        self.last_played_label = QLabel("<b>Last Played:</b> Loading...")
+        self.last_played_label.setStyleSheet("font-size: 12pt; margin-bottom: 8px; background: transparent;")
+        self.right_column.addWidget(self.last_played_label)
 
         self.desc_scroll = QScrollArea()
         self.desc_scroll.setWidgetResizable(True)
@@ -1126,6 +1130,10 @@ class GameDetailPanel(QWidget):
         )
         if not playtime_val:
             playtime_val = self._get_cached_playtime_seconds(self.game.get("id"))
+        last_played_val = (
+            rom.get("last_played") or rom.get("last-played") or rom.get("lastPlayed") or
+            md.get("last_played") or md.get("last-played") or md.get("lastPlayed")
+        )
 
         # Some backends return "0"/"0.0" strings for missing ratings.
         try:
@@ -1199,6 +1207,7 @@ class GameDetailPanel(QWidget):
             "publisher": pub_val,
             "players": players_val,
             "playtime": playtime_val,
+            "last_played": last_played_val,
             "cover_url": cover_url,
             "screenshot_urls": screenshot_urls,
         }
@@ -1220,6 +1229,7 @@ class GameDetailPanel(QWidget):
         companies_text = self._format_listish(resolved.get("developer"))
         players_text = self._format_players(resolved.get("players"))
         playtime_text = self._format_playtime(resolved.get("playtime"))
+        last_played_text = self._format_last_played(resolved.get("last_played"))
 
         self.release_label.setText(f"<b>Release:</b> {release_text}")
         self.genres_label.setText(f"<b>Genres:</b> {genres_text}")
@@ -1227,6 +1237,7 @@ class GameDetailPanel(QWidget):
         self.companies_label.setText(f"<b>Developer/Publisher:</b> {companies_text}")
         self.players_label.setText(f"<b>Max Players:</b> {players_text}")
         self.playtime_label.setText(f"<b>Playtime:</b> {playtime_text}")
+        self.last_played_label.setText(f"<b>Last Played:</b> {last_played_text}")
 
         try:
             self._set_screenshots(resolved.get("screenshot_urls") or [])
@@ -1398,6 +1409,13 @@ class GameDetailPanel(QWidget):
         except Exception:
             return
 
+    def set_last_played(self, last_played_iso):
+        try:
+            txt = self._format_last_played(last_played_iso)
+            self.last_played_label.setText(f"<b>Last Played:</b> {txt}")
+        except Exception:
+            return
+
     def _format_release_date(self, v):
         if not v:
             return "Unknown"
@@ -1423,6 +1441,40 @@ class GameDetailPanel(QWidget):
             return str(v)
         except Exception:
             return "Unknown"
+
+    def _format_last_played(self, v):
+        if not v:
+            return "Never"
+        try:
+            import datetime
+
+            if isinstance(v, (int, float)):
+                ts = float(v)
+                if ts <= 0:
+                    return "Never"
+                if ts > 10_000_000_000:
+                    ts = ts / 1000.0
+                return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+            if isinstance(v, str):
+                s = v.strip()
+                if not s:
+                    return "Never"
+                if s.isdigit():
+                    return self._format_last_played(int(s))
+
+                iso = s.replace("Z", "+00:00")
+                try:
+                    dt = datetime.datetime.fromisoformat(iso)
+                    return dt.astimezone().strftime("%Y-%m-%d %H:%M") if dt.tzinfo else dt.strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    if "T" in s:
+                        return s.replace("T", " ", 1)
+                    return s
+
+            return str(v)
+        except Exception:
+            return "Never"
 
     def _format_listish(self, v):
         if not v:

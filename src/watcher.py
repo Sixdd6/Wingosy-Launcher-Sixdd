@@ -179,6 +179,7 @@ class WingosyWatcher(QThread):
     conflict_signal = Signal(str, str, str, str) # title, local_path, temp_dl, rom_id
     notify_signal = Signal(str, str) # title, msg
     playtime_updated_signal = Signal(int, int) # rom_id, total_playtime_seconds
+    last_played_updated_signal = Signal(int, str) # rom_id, last_played_iso
     sync_cache_updated_signal = Signal(int) # rom_id
 
     def __init__(self, client, config):
@@ -274,9 +275,9 @@ class WingosyWatcher(QThread):
         try:
             secs = int(seconds)
         except Exception:
-            return
+            return None, None
         if secs <= 0:
-            return
+            return None, None
 
         rom_id_str = str(rom_id)
         entry = self.sync_cache.get(rom_id_str)
@@ -290,8 +291,10 @@ class WingosyWatcher(QThread):
 
         total = existing + secs
         entry["playtime_seconds"] = total
+        updated_at_iso = ""
         try:
-            entry["playtime_updated_at"] = datetime.now(timezone.utc).isoformat()
+            updated_at_iso = datetime.now(timezone.utc).isoformat()
+            entry["playtime_updated_at"] = updated_at_iso
         except Exception:
             pass
 
@@ -302,6 +305,14 @@ class WingosyWatcher(QThread):
             self.playtime_updated_signal.emit(int(rom_id), int(total))
         except Exception:
             pass
+
+        if updated_at_iso:
+            try:
+                self.last_played_updated_signal.emit(int(rom_id), str(updated_at_iso))
+            except Exception:
+                pass
+
+        return total, updated_at_iso
 
     def run(self):
         logging.info("🚀 Watcher Active (Process-Specific Mode).")
@@ -577,9 +588,14 @@ class WingosyWatcher(QThread):
         try:
             elapsed = int(time.time() - data.get('start_time', time.time()))
             if elapsed > 10:
-                self._add_local_playtime(data['rom_id'], elapsed)
+                total_playtime, last_played_iso = self._add_local_playtime(data['rom_id'], elapsed)
                 try:
-                    self.client.update_playtime(data['rom_id'], elapsed)
+                    self.client.update_playtime(
+                        data['rom_id'],
+                        elapsed,
+                        total_playtime_seconds=total_playtime,
+                        last_played_iso=last_played_iso,
+                    )
                 except Exception:
                     pass
                 logging.info(f"[Watcher] Playtime updated for {data['title']}: {elapsed}s")

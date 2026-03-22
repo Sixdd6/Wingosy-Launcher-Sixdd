@@ -1057,6 +1057,8 @@ class WingosyMainWindow(QMainWindow):
             self.watcher.notify_signal.connect(self.show_notification)
             if hasattr(self.watcher, 'playtime_updated_signal'):
                 self.watcher.playtime_updated_signal.connect(self._on_playtime_updated, Qt.QueuedConnection)
+            if hasattr(self.watcher, 'last_played_updated_signal'):
+                self.watcher.last_played_updated_signal.connect(self._on_last_played_updated, Qt.QueuedConnection)
             if hasattr(self.watcher, 'sync_cache_updated_signal'):
                 try:
                     handler = getattr(self.library_tab, '_on_sync_cache_updated', None)
@@ -1083,6 +1085,22 @@ class WingosyMainWindow(QMainWindow):
                 return
             if hasattr(detail, 'set_playtime_seconds'):
                 detail.set_playtime_seconds(total_seconds)
+        except Exception:
+            return
+
+    @Slot(int, str)
+    def _on_last_played_updated(self, rom_id, last_played_iso):
+        try:
+            detail = getattr(self.library_tab, 'detail_panel', None)
+            if not detail:
+                return
+            game = getattr(detail, 'game', {})
+            if not isinstance(game, dict):
+                return
+            if game.get('id') != rom_id:
+                return
+            if hasattr(detail, 'set_last_played'):
+                detail.set_last_played(last_played_iso)
         except Exception:
             return
 

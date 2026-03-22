@@ -2,6 +2,7 @@ import os
 import time
 import sys
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -267,6 +268,29 @@ class RomMClient:
                              timeout=REQUEST_TIMEOUT, verify=CERTIFI_PATH)
             if r.status_code == 200:
                 rom_data = r.json()
+                try:
+                    note_meta = None
+                    for note_obj in self.list_notes(str(rom_id)):
+                        parsed = self._parse_wingosy_metadata_note(self._extract_note_text(note_obj))
+                        if parsed is not None:
+                            note_meta = parsed
+                            break
+
+                    if note_meta is not None and isinstance(rom_data, dict):
+                        note_playtime = note_meta.get("playtime_seconds")
+                        if note_playtime is not None:
+                            try:
+                                note_playtime_int = max(0, int(note_playtime))
+                            except Exception:
+                                note_playtime_int = None
+                            if note_playtime_int is not None:
+                                rom_data["playtime_seconds"] = note_playtime_int
+
+                        note_last_played = note_meta.get("last_played")
+                        if isinstance(note_last_played, str) and note_last_played.strip():
+                            rom_data["last_played"] = note_last_played.strip()
+                except Exception:
+                    pass
                 logging.debug(f"ROM detail raw for {rom_id}: {json.dumps(rom_data, indent=2)}")
                 return rom_data
             return None
@@ -274,7 +298,156 @@ class RomMClient:
             print(f"[API] Error fetching ROM details for {rom_id}: {e}")
             return None
 
-    def update_playtime(self, rom_id, seconds):
+    def _extract_note_text(self, note_obj):
+        if not isinstance(note_obj, dict):
+            return None
+        for key in ("note", "content", "text", "body", "message"):
+            value = note_obj.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        return None
+
+    def _extract_note_id(self, note_obj):
+        if not isinstance(note_obj, dict):
+            return None
+        for key in ("id", "note_id"):
+            value = note_obj.get(key)
+            if value not in (None, ""):
+                return value
+        return None
+
+    def _parse_wingosy_metadata_note(self, note_text):
+        if not isinstance(note_text, str) or not note_text.strip():
+            return None
+        try:
+            payload = json.loads(note_text)
+        except Exception:
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+
+        meta = payload.get("wingosy_metadata")
+        if not isinstance(meta, dict):
+            if "playtime_seconds" in payload or "last-played" in payload or "last_played" in payload:
+                meta = payload
+            else:
+                return None
+
+        playtime_value = meta.get("playtime_seconds", 0)
+        try:
+            playtime_seconds = max(0, int(playtime_value or 0))
+        except Exception:
+            playtime_seconds = 0
+
+        last_played = meta.get("last-played") or meta.get("last_played")
+        if not isinstance(last_played, str):
+            last_played = ""
+
+        return {
+            "playtime_seconds": playtime_seconds,
+            "last_played": last_played,
+        }
+
+    def _build_wingosy_metadata_note(self, playtime_seconds, last_played_iso):
+        try:
+            playtime_total = max(0, int(playtime_seconds or 0))
+        except Exception:
+            playtime_total = 0
+
+        note_payload = {
+            "wingosy_metadata": {
+                "playtime_seconds": playtime_total,
+                "last-played": str(last_played_iso or ""),
+            }
+        }
+        return json.dumps(note_payload, separators=(",", ":"))
+
+    def list_notes(self, rom_id):
+        try:
+            r = requests.get(
+                f"{self.host}/api/roms/{rom_id}/notes",
+                headers=self.get_auth_headers(),
+                timeout=REQUEST_TIMEOUT,
+                verify=CERTIFI_PATH,
+            )
+            if r.status_code != 200:
+                return []
+
+            payload = r.json()
+            if isinstance(payload, list):
+                return payload
+
+            if isinstance(payload, dict):
+                notes = payload.get("notes")
+                if isinstance(notes, list):
+                    return notes
+                if any(k in payload for k in ("note", "content", "text", "body", "message")):
+                    return [payload]
+            return []
+        except Exception:
+            return []
+
+    def _upsert_wingosy_metadata_note(self, rom_id, playtime_seconds, last_played_iso):
+        rid = str(rom_id)
+        note_text = self._build_wingosy_metadata_note(playtime_seconds, last_played_iso)
+        headers = self.get_auth_headers()
+
+        existing_note = None
+        for note_obj in self.list_notes(rid):
+            parsed = self._parse_wingosy_metadata_note(self._extract_note_text(note_obj))
+            if parsed is not None:
+                existing_note = note_obj
+                break
+
+        payload_candidates = [
+            {"note": note_text},
+            {"content": note_text},
+            {"text": note_text},
+            {"body": note_text},
+            {"message": note_text},
+        ]
+
+        note_id = self._extract_note_id(existing_note)
+        if note_id is not None:
+            note_url = f"{self.host}/api/roms/{rid}/notes/{note_id}"
+            for method in ("patch", "put"):
+                for payload in payload_candidates:
+                    try:
+                        request_fn = getattr(requests, method)
+                        r = request_fn(
+                            note_url,
+                            headers=headers,
+                            json=payload,
+                            timeout=REQUEST_TIMEOUT,
+                            verify=CERTIFI_PATH,
+                        )
+                        if r.status_code in (200, 201, 204):
+                            return True
+                        if r.status_code in (400, 404, 405, 422):
+                            continue
+                    except Exception:
+                        continue
+
+        create_url = f"{self.host}/api/roms/{rid}/notes"
+        for payload in payload_candidates:
+            try:
+                r = requests.post(
+                    create_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=REQUEST_TIMEOUT,
+                    verify=CERTIFI_PATH,
+                )
+                if r.status_code in (200, 201, 204):
+                    return True
+                if r.status_code in (400, 404, 405, 422):
+                    continue
+            except Exception:
+                continue
+        return False
+
+    def update_playtime(self, rom_id, seconds, total_playtime_seconds=None, last_played_iso=None):
         try:
             secs = int(seconds)
         except Exception:
@@ -285,6 +458,41 @@ class RomMClient:
         rid = str(rom_id)
         headers = self.get_auth_headers()
 
+        try:
+            if last_played_iso:
+                parsed_last_played = str(last_played_iso)
+            else:
+                parsed_last_played = datetime.now(timezone.utc).isoformat()
+        except Exception:
+            parsed_last_played = datetime.now(timezone.utc).isoformat()
+
+        if total_playtime_seconds is None:
+            total_playtime = secs
+            try:
+                for note_obj in self.list_notes(rid):
+                    note_meta = self._parse_wingosy_metadata_note(self._extract_note_text(note_obj))
+                    if note_meta is None:
+                        continue
+                    total_playtime = max(0, int(note_meta.get("playtime_seconds") or 0)) + secs
+                    break
+            except Exception:
+                pass
+        else:
+            try:
+                total_playtime = max(0, int(total_playtime_seconds))
+            except Exception:
+                total_playtime = secs
+
+        note_ok = False
+        try:
+            note_ok = self._upsert_wingosy_metadata_note(
+                rid,
+                total_playtime,
+                parsed_last_played,
+            )
+        except Exception:
+            note_ok = False
+
         candidates = [
             ("PATCH", f"{self.host}/api/roms/{rid}", {"playtime_seconds": secs}),
             ("PATCH", f"{self.host}/api/roms/{rid}", {"playtime": secs}),
@@ -292,6 +500,7 @@ class RomMClient:
             ("POST", f"{self.host}/api/roms/{rid}/playtime", {"playtime_seconds": secs}),
         ]
 
+        legacy_ok = False
         for method, url, payload in candidates:
             try:
                 if method == "PATCH":
@@ -300,12 +509,13 @@ class RomMClient:
                     r = requests.post(url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT, verify=CERTIFI_PATH)
 
                 if r.status_code in (200, 201, 204):
-                    return True
+                    legacy_ok = True
+                    break
                 if r.status_code in (400, 404, 405, 422):
                     continue
             except Exception:
                 continue
-        return False
+        return note_ok or legacy_ok
 
     def get_cover_url(self, game):
         path = game.get('path_cover_large') or game.get('path_cover_small') 
