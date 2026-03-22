@@ -189,6 +189,21 @@ DEFAULT_EMULATORS = [
         "conflict_behavior": "ask"
     },
     {
+        "id": "redream",
+        "name": "ReDream",
+        "executable_path": "",
+        "launch_args": ["{rom_path}"],
+        "platform_slugs": ["dreamcast", "sega-dreamcast", "dc"],
+        "save_resolution": {
+            "mode": "folder",
+            "path": ""
+        },
+        "folder": "redream",
+        "user_defined": False,
+        "sync_enabled": True,
+        "conflict_behavior": "ask"
+    },
+    {
         "id": "windows_native",
         "name": "Windows (Native)",
         "executable_path": "",

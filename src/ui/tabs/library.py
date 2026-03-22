@@ -18,6 +18,9 @@ from src.platforms import RETROARCH_PLATFORMS, platform_matches
 from src import emulators, download_registry
 
 CLOUD_BADGE_PROBE_TTL_SECONDS = 300
+CLOUD_BADGE_PROBE_FAILURE_TTL_SECONDS = 60
+CLOUD_BADGE_PROBE_MAX_IDS_PER_PASS = 80
+CLOUD_BADGE_PROBE_STATUS_TEXT = "Checking for cloud save updates..."
 
 
 def _entry_has_cloud_save(entry):
@@ -151,6 +154,7 @@ class CloudSaveProbeThread(QThread):
                     "state_updated_at": latest_state.get('updated_at') if isinstance(latest_state, dict) else None,
                 }
                 self.probed.emit(int(rid), payload)
+                time.sleep(0.02)
             except Exception:
                 try:
                     self.probed.emit(int(rid), None)
@@ -548,6 +552,7 @@ class LibraryTab(QWidget):
         self._cloud_probe_thread = None
         self._cloud_probe_pending = set()
         self._cloud_probe_backlog = []
+        self._cloud_probe_activity_visible = False
 
         self._scroll_debounce = QTimer()
         self._scroll_debounce.setSingleShot(True)
@@ -759,12 +764,15 @@ class LibraryTab(QWidget):
                 if isinstance(entry, dict):
                     try:
                         checked_at = float(entry.get('cloud_probe_checked_at') or 0)
-                        checked_recently = (now_ts - checked_at) < CLOUD_BADGE_PROBE_TTL_SECONDS
+                        ttl = CLOUD_BADGE_PROBE_FAILURE_TTL_SECONDS if entry.get('cloud_probe_failed') else CLOUD_BADGE_PROBE_TTL_SECONDS
+                        checked_recently = (now_ts - checked_at) < ttl
                     except Exception:
                         checked_recently = False
                 if checked_recently:
                     continue
                 if rid_str in self._cloud_probe_pending:
+                    continue
+                if len(ids) >= CLOUD_BADGE_PROBE_MAX_IDS_PER_PASS:
                     continue
                 self._cloud_probe_pending.add(rid_str)
                 ids.append(rid)
@@ -790,15 +798,42 @@ class LibraryTab(QWidget):
 
         self._start_cloud_probe_thread(ids)
 
+    def _set_cloud_probe_activity(self, active):
+        try:
+            active = bool(active)
+            if active:
+                if self._cloud_probe_activity_visible:
+                    return
+                self._cloud_probe_activity_visible = True
+                try:
+                    if hasattr(self.main_window, 'title_bar'):
+                        self.main_window.title_bar.set_activity(CLOUD_BADGE_PROBE_STATUS_TEXT)
+                except Exception:
+                    pass
+                return
+
+            if not self._cloud_probe_activity_visible:
+                return
+            self._cloud_probe_activity_visible = False
+            try:
+                if hasattr(self.main_window, 'title_bar'):
+                    self.main_window.title_bar.clear_activity()
+            except Exception:
+                pass
+        except Exception:
+            return
+
     def _start_cloud_probe_thread(self, ids):
         if not ids:
             return
         try:
+            self._set_cloud_probe_activity(True)
             self._cloud_probe_thread = CloudSaveProbeThread(self.client, ids)
             self._cloud_probe_thread.probed.connect(self._on_cloud_probe_result, Qt.QueuedConnection)
             self._cloud_probe_thread.finished.connect(self._on_cloud_probe_thread_finished, Qt.QueuedConnection)
             self._cloud_probe_thread.start()
         except Exception:
+            self._set_cloud_probe_activity(False)
             return
 
     @Slot()
@@ -817,6 +852,9 @@ class LibraryTab(QWidget):
 
         if backlog_ids:
             self._start_cloud_probe_thread(backlog_ids)
+            return
+
+        self._set_cloud_probe_activity(False)
 
     @Slot(int, object)
     def _on_cloud_probe_result(self, rom_id, probe_payload):
@@ -827,9 +865,6 @@ class LibraryTab(QWidget):
             except Exception:
                 pass
 
-            if not isinstance(probe_payload, dict):
-                return
-
             watcher = getattr(self.main_window, 'watcher', None)
             if not watcher:
                 return
@@ -838,9 +873,20 @@ class LibraryTab(QWidget):
             if not isinstance(entry, dict):
                 entry = {}
 
+            if not isinstance(probe_payload, dict):
+                entry['cloud_probe_checked_at'] = time.time()
+                entry['cloud_probe_failed'] = True
+                watcher.sync_cache[rid_str] = entry
+                try:
+                    watcher.save_cache()
+                except Exception:
+                    pass
+                return
+
             has_cloud_save = bool(probe_payload.get("has_cloud_save"))
             entry['has_cloud_save'] = has_cloud_save
             entry['cloud_probe_checked_at'] = time.time()
+            entry.pop('cloud_probe_failed', None)
 
             save_updated_at = probe_payload.get("save_updated_at")
             state_updated_at = probe_payload.get("state_updated_at")
@@ -1062,7 +1108,11 @@ class LibraryTab(QWidget):
             self.grid_widget.setUpdatesEnabled(True)
 
         try:
-            self._request_cloud_badge_prime([getattr(c, 'game', None) for c in (self._all_cards or [])])
+            self._request_cloud_badge_prime([
+                getattr(c, 'game', None)
+                for c in (self._all_cards or [])
+                if c and c.isVisible()
+            ])
         except Exception:
             pass
 
@@ -1479,6 +1529,11 @@ class LibraryTab(QWidget):
                 self.main_window.image_fetch_queue.append(card)
 
         try:
+            self._request_cloud_badge_prime(batch)
+        except Exception:
+            pass
+
+        try:
             while (len(self.main_window.active_image_fetchers) < max_concurrent
                    and self.main_window.image_fetch_queue):
                 next_card = self.main_window.image_fetch_queue.pop(0)
@@ -1581,3 +1636,26 @@ class LibraryTab(QWidget):
         empty_label.setAlignment(Qt.AlignCenter)
         empty_label.setStyleSheet("color: #888; font-size: 14px; padding: 40px;")
         self.grid_layout.addWidget(empty_label, 0, 0)
+
+    def closeEvent(self, event):
+        try:
+            t = getattr(self, '_cloud_probe_thread', None)
+            if t and t.isRunning():
+                try:
+                    t.requestInterruption()
+                except Exception:
+                    pass
+                try:
+                    t.quit()
+                except Exception:
+                    pass
+                try:
+                    t.wait(1000)
+                except Exception:
+                    pass
+            self._cloud_probe_thread = None
+            self._cloud_probe_backlog = []
+            self._cloud_probe_pending.clear()
+        except Exception:
+            pass
+        super().closeEvent(event)

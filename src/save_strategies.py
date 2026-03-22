@@ -684,6 +684,10 @@ _EMU_SAVE_HINTS: dict[str, list] = {
         lambda rom: Path(os.path.expandvars(r'%APPDATA%')) / "melonDS" / "saves" / f"{Path(rom.get('fs_name', '')).stem}.sav" if isinstance(rom, dict) and rom.get('fs_name') else Path(os.path.expandvars(r'%APPDATA%\melonDS')),
         lambda rom: Path(os.path.expandvars(r'%USERPROFILE%')) / "Documents" / "melonDS" / "saves" / f"{Path(rom.get('fs_name', '')).stem}.sav" if isinstance(rom, dict) and rom.get('fs_name') else Path.home() / "Documents" / "melonDS",
     ],
+    "redream": [
+        lambda e: Path(e).parent,
+        lambda _: Path(os.path.expandvars(r'%APPDATA%\redream')),
+    ],
     # xemu saves are stored inside xbox_hdd.qcow2 virtual disk image
     # and cannot be synced as regular files. Save sync not supported.
 }
@@ -903,6 +907,77 @@ class XeniaStrategy(SaveStrategy):
         return True
 
 
+class RedreamStrategy(SaveStrategy):
+    """
+    Handles reDream saves in portable and AppData installs.
+    Syncs VMU files plus files under saves/ and states/.
+    """
+    mode_id = "redream"
+
+    def _base_dir(self) -> Optional[Path]:
+        res = self.emulator.get("save_resolution", {})
+        save_dir = res.get("path") or res.get("save_dir") or res.get("srm_dir")
+        if save_dir and Path(save_dir).exists():
+            return Path(save_dir)
+
+        exe = self.emulator.get("executable_path", "")
+        if exe:
+            portable = Path(exe).parent
+            if portable.exists():
+                return portable
+
+        appdata = Path(os.path.expandvars(r'%APPDATA%\redream'))
+        if appdata.exists():
+            return appdata
+        return None
+
+    def get_save_files(self, rom: dict) -> list[Path]:
+        base = self._base_dir()
+        if not base or not base.exists():
+            return []
+
+        files: list[Path] = []
+
+        # VMU save storage used by reDream (vmu0.bin ... vmuN.bin)
+        for p in sorted(base.glob("vmu*.bin")):
+            if p.is_file() and ".bak" not in p.name.lower():
+                files.append(p)
+
+        # Include optional flash metadata if present
+        flash = base / "flash.bin"
+        if flash.exists() and flash.is_file() and ".bak" not in flash.name.lower():
+            files.append(flash)
+
+        # Include game saves and states folders when present
+        for folder_name in ("saves", "states"):
+            d = base / folder_name
+            if d.exists() and d.is_dir():
+                files.extend(
+                    p for p in d.rglob("*")
+                    if p.is_file() and ".bak" not in p.name.lower()
+                )
+
+        return files
+
+    def get_save_dir(self, rom: dict) -> Optional[Path]:
+        return self._base_dir()
+
+    def restore_save_files(self, rom: dict, save_data: bytes, filename: str) -> bool:
+        base = self._base_dir()
+        if not base:
+            return False
+
+        target = base / filename
+        self._backup_save(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target.write_bytes(save_data)
+            return True
+        except Exception as e:
+            logging.error(f"[RedreamStrategy] Restore failed: {e}")
+            return False
+
+
 class FileStrategy(SaveStrategy):
     """
     Handles emulators that use a single save file per ROM.
@@ -1023,6 +1098,7 @@ STRATEGY_REGISTRY: dict[str, type[SaveStrategy]] = {
     "cemu": CemuStrategy,
     "duckstation": DuckStationStrategy,
     "xenia": XeniaStrategy,
+    "redream": RedreamStrategy,
 }
 
 def get_strategy(config: dict, emulator: dict) -> SaveStrategy:
@@ -1031,6 +1107,7 @@ def get_strategy(config: dict, emulator: dict) -> SaveStrategy:
     """
     mode = emulator.get("save_resolution", {}).get("mode", "retroarch")
     emu_id = emulator.get("id", "")
+    exe_name = Path(emulator.get("executable_path", "")).name.lower()
 
     if emu_id == "windows_native" or emulator.get("is_native"):
         mode = "windows"
@@ -1042,6 +1119,8 @@ def get_strategy(config: dict, emulator: dict) -> SaveStrategy:
         if emu_id == "eden": mode = "switch"
         elif emu_id == "rpcs3": mode = "ps3"
         elif emu_id == "duckstation": mode = "duckstation"
+        elif emu_id == "redream": mode = "redream"
+        elif exe_name == "redream.exe": mode = "redream"
         elif emu_id in ("xenia", "xenia_canary"): mode = "xenia"
         elif emu_id in STRATEGY_REGISTRY and emu_id not in ("folder", "file", "retroarch"):
             mode = emu_id

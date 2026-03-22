@@ -71,9 +71,15 @@ class PostSessionSyncThread(QThread):
             uploaded_count = 0
             # Split save files: .ps2 (zipped together) vs others (individual)
             ps2_files   = [f for f in save_files if not f.is_dir() and f.suffix.lower() == '.ps2' and '.bak' not in f.name.lower()]
-            srm_files   = [f for f in save_files if not f.is_dir() and f.suffix.lower() in ('.srm', '.sav') and '.bak' not in f.name.lower()]
             state_files  = [f for f in save_files if not f.is_dir() and '.state' in f.name.lower() and '.bak' not in f.name.lower()]
             folder_files = [f for f in save_files if f.is_dir()]
+            regular_save_files = [
+                f for f in save_files
+                if not f.is_dir()
+                and f not in ps2_files
+                and f not in state_files
+                and '.bak' not in f.name.lower()
+            ]
 
             ts = time.strftime("_%Y-%m-%d_%H-%M")
 
@@ -110,11 +116,11 @@ class PostSessionSyncThread(QThread):
                 if temp_zip.exists(): temp_zip.unlink()
                 ok = ok and ok2
 
-            for srm in srm_files:
-                fname = f"{srm.stem}{ts}{srm.suffix}"
+            for save_file in regular_save_files:
+                fname = f"{save_file.stem}{ts}{save_file.suffix}"
                 slot_name = f"wingosy-srm{ts}"
                 logging.info(f"[SyncThread] Uploading SRM: slot={slot_name}, filename={fname}")
-                ok2, msg = self.watcher.client.upload_save(rom_id, emu_id, str(srm), slot=slot_name, filename_override=fname)
+                ok2, msg = self.watcher.client.upload_save(rom_id, emu_id, str(save_file), slot=slot_name, filename_override=fname)
                 if ok2:
                     uploaded_count += 1
                 ok = ok and ok2

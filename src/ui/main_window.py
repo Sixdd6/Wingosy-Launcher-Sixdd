@@ -74,6 +74,7 @@ class WingosyMainWindow(QMainWindow):
         self.tray_icon = None
         self.watcher = None
         self.active_threads = []
+        self._fetch_threads = []
         self.image_fetch_queue = []
         self.active_image_fetchers = []
         self.fetch_generation = 0
@@ -84,6 +85,8 @@ class WingosyMainWindow(QMainWindow):
         self._last_frame_apply_ts = 0.0
         self._restore_maximized = False
         self._restore_maximized_applied = False
+        self._is_shutting_down = False
+        self._shutdown_complete = False
         
         # Custom window frame setup
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
@@ -351,6 +354,9 @@ class WingosyMainWindow(QMainWindow):
             logging.warning(f"[Library] Cache load failed: {e}")
 
     def _start_local_discovery(self, games):
+        if bool(getattr(self, '_is_shutting_down', False)):
+            return
+
         if hasattr(self, '_discovery_worker') and self._discovery_worker.isRunning():
             self._discovery_worker.stop()
             self._discovery_worker.wait()
@@ -365,7 +371,11 @@ class WingosyMainWindow(QMainWindow):
 
     def _on_local_discovery_finished(self):
         if hasattr(self, 'title_bar'):
-            self.title_bar.clear_activity()
+            try:
+                if not bool(getattr(self.library_tab, '_cloud_probe_activity_visible', False)):
+                    self.title_bar.clear_activity()
+            except Exception:
+                self.title_bar.clear_activity()
 
     @Slot(int, str)
     def _on_rom_discovered(self, game_id, local_path):
@@ -403,6 +413,9 @@ class WingosyMainWindow(QMainWindow):
                 self.active_image_fetchers.append(new_fetcher)
 
     def fetch_library_and_populate(self, force_refresh=False):
+        if bool(getattr(self, '_is_shutting_down', False)):
+            return
+
         """
         force_refresh=False (default): show cache instantly, 
                                         refresh in background silently.
@@ -443,8 +456,22 @@ class WingosyMainWindow(QMainWindow):
         # Step C — Start worker
         cached_non_empty = len(self.all_games) > 0
         self._fetch_thread = LibraryFetchWorker(self.client, cached_non_empty=cached_non_empty)
+        try:
+            self._fetch_threads.append(self._fetch_thread)
+        except Exception:
+            pass
+
+        def _cleanup_fetch_thread(t):
+            try:
+                if t in self._fetch_threads:
+                    self._fetch_threads.remove(t)
+            except Exception:
+                pass
+
         self._fetch_thread.finished.connect(self._on_library_fetched)
         self._fetch_thread.error.connect(self._on_library_fetch_error)
+        self._fetch_thread.finished.connect(lambda _res, t=self._fetch_thread: _cleanup_fetch_thread(t))
+        self._fetch_thread.error.connect(lambda t=self._fetch_thread: _cleanup_fetch_thread(t))
         self._fetch_thread.retrying.connect(lambda: self.library_tab.set_status("Server is slow, retrying with longer timeout... (this may take a few minutes)", color="#e65100"))
         self._fetch_thread.batch_ready.connect(self._on_library_batch)
         self._fetch_thread.start()
@@ -455,7 +482,11 @@ class WingosyMainWindow(QMainWindow):
         self.library_tab.search_input.setEnabled(True)
         self.library_tab.platform_filter.setEnabled(True)
         if hasattr(self, 'title_bar'):
-            self.title_bar.clear_activity()
+            try:
+                if not bool(getattr(self.library_tab, '_cloud_probe_activity_visible', False)):
+                    self.title_bar.clear_activity()
+            except Exception:
+                self.title_bar.clear_activity()
         self._emit_initial_library_ready(False)
 
     def _on_library_batch(self, batch, total):
@@ -546,7 +577,11 @@ class WingosyMainWindow(QMainWindow):
         self.library_tab.search_input.setEnabled(True)
         self.library_tab.platform_filter.setEnabled(True)
         if hasattr(self, 'title_bar'):
-            self.title_bar.clear_activity()
+            try:
+                if not bool(getattr(self.library_tab, '_cloud_probe_activity_visible', False)):
+                    self.title_bar.clear_activity()
+            except Exception:
+                self.title_bar.clear_activity()
 
         self._start_local_discovery(self.all_games)
 
@@ -1101,6 +1136,7 @@ class WingosyMainWindow(QMainWindow):
             return
 
     def closeEvent(self, event):
+        self._is_shutting_down = True
         self._shutdown_threads()
         
         settings = QSettings("Wingosy", "WingosyLauncher")
@@ -1113,6 +1149,46 @@ class WingosyMainWindow(QMainWindow):
         event.accept()
 
     def _shutdown_threads(self):
+        if bool(getattr(self, '_shutdown_complete', False)):
+            return
+
+        self._is_shutting_down = True
+
+        def _stop_qthread(t, wait_ms=1500):
+            if not t:
+                return
+            try:
+                if hasattr(t, 'cancel'):
+                    t.cancel()
+            except Exception:
+                pass
+            try:
+                if hasattr(t, 'stop'):
+                    t.stop()
+            except Exception:
+                pass
+            try:
+                if hasattr(t, 'requestInterruption'):
+                    t.requestInterruption()
+            except Exception:
+                pass
+            try:
+                if hasattr(t, 'quit'):
+                    t.quit()
+            except Exception:
+                pass
+            try:
+                if hasattr(t, 'wait'):
+                    t.wait(wait_ms)
+            except Exception:
+                pass
+            try:
+                if hasattr(t, 'isRunning') and t.isRunning():
+                    t.terminate()
+                    t.wait(500)
+            except Exception:
+                pass
+
         try:
             download_registry.shutdown_all(timeout_ms=1500)
         except Exception:
@@ -1140,25 +1216,21 @@ class WingosyMainWindow(QMainWindow):
         except Exception:
             ft = None
         if ft and hasattr(ft, 'isRunning') and ft.isRunning():
-            try:
-                if hasattr(ft, 'requestInterruption'):
-                    ft.requestInterruption()
-            except Exception:
-                pass
-            try:
-                ft.quit()
-            except Exception:
-                pass
-            try:
-                ft.wait(2000)
-            except Exception:
-                pass
-            try:
-                if ft.isRunning():
-                    ft.terminate()
-                    ft.wait(500)
-            except Exception:
-                pass
+            _stop_qthread(ft, wait_ms=2000)
+
+        # Stop any additional outstanding fetch workers
+        try:
+            fetch_threads = list(getattr(self, '_fetch_threads', []) or [])
+        except Exception:
+            fetch_threads = []
+        for t in fetch_threads:
+            if t is ft:
+                continue
+            _stop_qthread(t, wait_ms=2000)
+        try:
+            self._fetch_threads = []
+        except Exception:
+            pass
 
         # Stop local discovery worker
         try:
@@ -1166,28 +1238,36 @@ class WingosyMainWindow(QMainWindow):
         except Exception:
             dw = None
         if dw and hasattr(dw, 'isRunning') and dw.isRunning():
+            _stop_qthread(dw, wait_ms=10000)
+
+        # Stop library cloud probe worker (can be blocked in network calls)
+        try:
+            lib = getattr(self, 'library_tab', None)
+        except Exception:
+            lib = None
+        if lib:
             try:
-                if hasattr(dw, 'stop'):
-                    dw.stop()
+                lib._cloud_probe_backlog = []
             except Exception:
                 pass
             try:
-                if hasattr(dw, 'requestInterruption'):
-                    dw.requestInterruption()
+                lib._cloud_probe_pending.clear()
             except Exception:
                 pass
             try:
-                dw.quit()
+                if hasattr(lib, '_set_cloud_probe_activity'):
+                    lib._set_cloud_probe_activity(False)
             except Exception:
                 pass
+
             try:
-                dw.wait(2000)
+                cpt = getattr(lib, '_cloud_probe_thread', None)
             except Exception:
-                pass
+                cpt = None
+            if cpt:
+                _stop_qthread(cpt, wait_ms=3000)
             try:
-                if dw.isRunning():
-                    dw.terminate()
-                    dw.wait(500)
+                lib._cloud_probe_thread = None
             except Exception:
                 pass
 
@@ -1199,25 +1279,7 @@ class WingosyMainWindow(QMainWindow):
         for f in fetchers:
             if not f:
                 continue
-            try:
-                if hasattr(f, 'requestInterruption'):
-                    f.requestInterruption()
-            except Exception:
-                pass
-            try:
-                f.quit()
-            except Exception:
-                pass
-            try:
-                f.wait(1000)
-            except Exception:
-                pass
-            try:
-                if hasattr(f, 'isRunning') and f.isRunning():
-                    f.terminate()
-                    f.wait(500)
-            except Exception:
-                pass
+            _stop_qthread(f, wait_ms=1000)
 
         # Stop any other active threads we track (downloaders, extractors, etc.)
         try:
@@ -1227,32 +1289,8 @@ class WingosyMainWindow(QMainWindow):
         for t in threads:
             if not t:
                 continue
-            try:
-                if hasattr(t, 'cancel'):
-                    t.cancel()
-            except Exception:
-                pass
-            try:
-                if hasattr(t, 'requestInterruption'):
-                    t.requestInterruption()
-            except Exception:
-                pass
-            try:
-                if hasattr(t, 'quit'):
-                    t.quit()
-            except Exception:
-                pass
-            try:
-                if hasattr(t, 'wait'):
-                    t.wait(1500)
-            except Exception:
-                pass
-            try:
-                if hasattr(t, 'isRunning') and t.isRunning():
-                    t.terminate()
-                    t.wait(500)
-            except Exception:
-                pass
+            _stop_qthread(t, wait_ms=1500)
+        self._shutdown_complete = True
 
     def _apply_windows_frame(self):
         import sys

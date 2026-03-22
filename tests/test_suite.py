@@ -745,7 +745,10 @@ class TestCloudSaveProbeThread:
 
         t.run()
 
-        t.probed.emit.assert_called_once_with(123, None)
+        t.probed.emit.assert_called_once_with(
+            123,
+            {"has_cloud_save": False, "save_updated_at": None, "state_updated_at": None},
+        )
 
     def test_probe_emits_state_payload_when_state_exists(self):
         from unittest.mock import MagicMock
@@ -762,7 +765,11 @@ class TestCloudSaveProbeThread:
 
         t.probed.emit.assert_called_once_with(
             5,
-            {"save_updated_at": None, "state_updated_at": "2025-01-01T00:00:00Z"},
+            {
+                "has_cloud_save": True,
+                "save_updated_at": None,
+                "state_updated_at": "2025-01-01T00:00:00Z",
+            },
         )
 
 

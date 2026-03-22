@@ -403,6 +403,48 @@ class SaveSyncSetupDialog(QWidget):
             self.accepted.emit()
             self.close()
 
+    def closeEvent(self, event):
+        try:
+            wt = getattr(self, 'wiki_timeout', None)
+            if wt:
+                try:
+                    wt.stop()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        try:
+            worker = getattr(self, 'wiki_worker', None)
+        except Exception:
+            worker = None
+
+        if worker:
+            try:
+                if worker.isRunning():
+                    try:
+                        worker.requestInterruption()
+                    except Exception:
+                        pass
+                    try:
+                        worker.quit()
+                    except Exception:
+                        pass
+                    try:
+                        worker.wait(1200)
+                    except Exception:
+                        pass
+                    try:
+                        if worker.isRunning():
+                            worker.terminate()
+                            worker.wait(500)
+                    except Exception:
+                        pass
+            finally:
+                self.wiki_worker = None
+
+        super().closeEvent(event)
+
 class CloudSaveManagerDialog(QWidget):
     def __init__(self, game, client, config, main_window, parent=None):
         super().__init__(parent)
@@ -601,6 +643,44 @@ class CloudSaveManagerDialog(QWidget):
             self.load_history()
         else:
             StyledMessageBox.warning(self, "Error", "Delete failed.")
+
+    def closeEvent(self, event):
+        for attr_name, timeout_ms in (("worker", 1200), ("rt", 1200)):
+            try:
+                t = getattr(self, attr_name, None)
+            except Exception:
+                t = None
+
+            if not t:
+                continue
+
+            try:
+                if t.isRunning():
+                    try:
+                        t.requestInterruption()
+                    except Exception:
+                        pass
+                    try:
+                        t.quit()
+                    except Exception:
+                        pass
+                    try:
+                        t.wait(timeout_ms)
+                    except Exception:
+                        pass
+                    try:
+                        if t.isRunning():
+                            t.terminate()
+                            t.wait(500)
+                    except Exception:
+                        pass
+            finally:
+                try:
+                    setattr(self, attr_name, None)
+                except Exception:
+                    pass
+
+        super().closeEvent(event)
 
 from src import emulators
 from src.save_strategies import get_strategy

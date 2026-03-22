@@ -340,6 +340,38 @@ class WindowsGameSettingsDialog(QWidget):
     def _on_wiki_path_selected(self, path):
         self.save_dir = path
         self.update_ui()
+
+    def closeEvent(self, event):
+        try:
+            t = getattr(self, 'wiki_thread', None)
+        except Exception:
+            t = None
+
+        if t:
+            try:
+                if t.isRunning():
+                    try:
+                        t.requestInterruption()
+                    except Exception:
+                        pass
+                    try:
+                        t.quit()
+                    except Exception:
+                        pass
+                    try:
+                        t.wait(1200)
+                    except Exception:
+                        pass
+                    try:
+                        if t.isRunning():
+                            t.terminate()
+                            t.wait(500)
+                    except Exception:
+                        pass
+            finally:
+                self.wiki_thread = None
+
+        super().closeEvent(event)
             
     def save_and_close(self):
         windows_saves.set_windows_save(self.game['id'], self.game['name'], self.save_dir, self.default_exe)
