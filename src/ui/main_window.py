@@ -104,13 +104,9 @@ class WingosyMainWindow(QMainWindow):
         except Exception:
             self._restore_maximized = False
 
-        normal_geometry = settings.value("normal_geometry")
-        if isinstance(normal_geometry, QRect) and not normal_geometry.isNull():
-            self.setGeometry(normal_geometry)
-        else:
-            geometry = settings.value("geometry")
-            if geometry:
-                self.restoreGeometry(geometry)
+        geometry = settings.value("geometry")
+        if geometry:
+            self.restoreGeometry(geometry)
 
         QTimer.singleShot(50, self._ensure_window_within_screen)
         
@@ -1113,13 +1109,7 @@ class WingosyMainWindow(QMainWindow):
         except Exception:
             pass
 
-        try:
-            settings.setValue("normal_geometry", self.normalGeometry())
-        except Exception:
-            pass
-
-        if not self.isMaximized() and not self.isFullScreen():
-            settings.setValue("geometry", self.saveGeometry())
+        settings.setValue("geometry", self.saveGeometry())
         event.accept()
 
     def _shutdown_threads(self):
@@ -1491,7 +1481,8 @@ class WingosyMainWindow(QMainWindow):
             try:
                 is_zoomed = bool(ctypes.windll.user32.IsZoomed(hwnd))
             except Exception:
-                is_zoomed = self.isMaximized()
+                is_zoomed = False
+            is_zoomed = is_zoomed or self.isMaximized() or bool(self.windowState() & Qt.WindowMaximized)
 
             if not is_zoomed:
                 on_left   = dist_left   <= b

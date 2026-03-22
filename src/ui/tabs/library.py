@@ -3,6 +3,7 @@ import re
 import logging
 import ctypes
 import sys
+import time
 from pathlib import Path
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,   
                              QPushButton, QLineEdit, QScrollArea, QGridLayout,
@@ -15,6 +16,20 @@ from src.ui.threads import ImageFetcher
 from src.ui.widgets import format_speed, get_resource_path
 from src.platforms import RETROARCH_PLATFORMS, platform_matches
 from src import emulators, download_registry
+
+CLOUD_BADGE_PROBE_TTL_SECONDS = 300
+
+
+def _entry_has_cloud_save(entry):
+    if not isinstance(entry, dict):
+        return False
+    explicit = entry.get("has_cloud_save")
+    if explicit is not None:
+        return bool(explicit)
+    return bool(
+        entry.get('save_updated_at') or entry.get('save_mtime') or
+        entry.get('state_updated_at') or entry.get('state_mtime')
+    )
 
 CONTROLLER_MAPS = {
     "xinput": {
@@ -129,13 +144,13 @@ class CloudSaveProbeThread(QThread):
                     latest_state = None
 
                 payload = {
+                    "has_cloud_save": bool(
+                        isinstance(latest_save, dict) or isinstance(latest_state, dict)
+                    ),
                     "save_updated_at": latest_save.get('updated_at') if isinstance(latest_save, dict) else None,
                     "state_updated_at": latest_state.get('updated_at') if isinstance(latest_state, dict) else None,
                 }
-                if not payload.get("save_updated_at") and not payload.get("state_updated_at"):
-                    self.probed.emit(int(rid), None)
-                else:
-                    self.probed.emit(int(rid), payload)
+                self.probed.emit(int(rid), payload)
             except Exception:
                 try:
                     self.probed.emit(int(rid), None)
@@ -210,12 +225,7 @@ class GameCard(QWidget):
         try:
             rom_id = str(self.game.get('id', ''))
             entry = sync_cache.get(rom_id, {}) if isinstance(sync_cache, dict) else {}
-            has_cloud_save = False
-            if isinstance(entry, dict):
-                has_cloud_save = bool(
-                    entry.get('save_updated_at') or entry.get('save_mtime') or
-                    entry.get('state_updated_at') or entry.get('state_mtime')
-                )
+            has_cloud_save = _entry_has_cloud_save(entry)
 
             if has_cloud_save:
                 if not hasattr(self, 'cloud_indicator'):
@@ -537,6 +547,7 @@ class LibraryTab(QWidget):
 
         self._cloud_probe_thread = None
         self._cloud_probe_pending = set()
+        self._cloud_probe_backlog = []
 
         self._scroll_debounce = QTimer()
         self._scroll_debounce.setSingleShot(True)
@@ -734,6 +745,7 @@ class LibraryTab(QWidget):
             sync_cache = {}
 
         ids = []
+        now_ts = time.time()
         for g in (games or []):
             try:
                 if not isinstance(g, dict):
@@ -743,10 +755,14 @@ class LibraryTab(QWidget):
                     continue
                 rid_str = str(rid)
                 entry = sync_cache.get(rid_str)
-                if isinstance(entry, dict) and (
-                    entry.get('save_updated_at') or entry.get('save_mtime') or
-                    entry.get('state_updated_at') or entry.get('state_mtime')
-                ):
+                checked_recently = False
+                if isinstance(entry, dict):
+                    try:
+                        checked_at = float(entry.get('cloud_probe_checked_at') or 0)
+                        checked_recently = (now_ts - checked_at) < CLOUD_BADGE_PROBE_TTL_SECONDS
+                    except Exception:
+                        checked_recently = False
+                if checked_recently:
                     continue
                 if rid_str in self._cloud_probe_pending:
                     continue
@@ -761,20 +777,49 @@ class LibraryTab(QWidget):
         try:
             t = getattr(self, '_cloud_probe_thread', None)
             if t and t.isRunning():
+                for rid in ids:
+                    try:
+                        rid_int = int(rid)
+                    except Exception:
+                        continue
+                    if rid_int not in self._cloud_probe_backlog:
+                        self._cloud_probe_backlog.append(rid_int)
                 return
         except Exception:
             pass
 
+        self._start_cloud_probe_thread(ids)
+
+    def _start_cloud_probe_thread(self, ids):
+        if not ids:
+            return
         try:
             self._cloud_probe_thread = CloudSaveProbeThread(self.client, ids)
             self._cloud_probe_thread.probed.connect(self._on_cloud_probe_result, Qt.QueuedConnection)
-            self._cloud_probe_thread.finished.connect(lambda: setattr(self, '_cloud_probe_thread', None))
+            self._cloud_probe_thread.finished.connect(self._on_cloud_probe_thread_finished, Qt.QueuedConnection)
             self._cloud_probe_thread.start()
         except Exception:
             return
 
+    @Slot()
+    def _on_cloud_probe_thread_finished(self):
+        try:
+            self._cloud_probe_thread = None
+        except Exception:
+            pass
+
+        backlog_ids = []
+        try:
+            backlog_ids = list(self._cloud_probe_backlog)
+            self._cloud_probe_backlog = []
+        except Exception:
+            backlog_ids = []
+
+        if backlog_ids:
+            self._start_cloud_probe_thread(backlog_ids)
+
     @Slot(int, object)
-    def _on_cloud_probe_result(self, rom_id, updated_at):
+    def _on_cloud_probe_result(self, rom_id, probe_payload):
         try:
             rid_str = str(rom_id)
             try:
@@ -782,7 +827,7 @@ class LibraryTab(QWidget):
             except Exception:
                 pass
 
-            if not updated_at:
+            if not isinstance(probe_payload, dict):
                 return
 
             watcher = getattr(self.main_window, 'watcher', None)
@@ -793,21 +838,21 @@ class LibraryTab(QWidget):
             if not isinstance(entry, dict):
                 entry = {}
 
-            if isinstance(updated_at, dict):
-                save_updated_at = updated_at.get("save_updated_at")
-                state_updated_at = updated_at.get("state_updated_at")
+            has_cloud_save = bool(probe_payload.get("has_cloud_save"))
+            entry['has_cloud_save'] = has_cloud_save
+            entry['cloud_probe_checked_at'] = time.time()
 
-                if save_updated_at and not (entry.get('save_mtime') or entry.get('save_updated_at')):
+            save_updated_at = probe_payload.get("save_updated_at")
+            state_updated_at = probe_payload.get("state_updated_at")
+
+            if has_cloud_save:
+                if save_updated_at:
                     entry['save_updated_at'] = save_updated_at
-                if state_updated_at and not (entry.get('state_mtime') or entry.get('state_updated_at')):
+                if state_updated_at:
                     entry['state_updated_at'] = state_updated_at
-
-                if not save_updated_at and not state_updated_at:
-                    return
             else:
-                if entry.get('save_mtime') or entry.get('save_updated_at'):
-                    return
-                entry['save_updated_at'] = updated_at
+                entry.pop('save_updated_at', None)
+                entry.pop('state_updated_at', None)
 
             watcher.sync_cache[rid_str] = entry
             try:
@@ -1466,6 +1511,11 @@ class LibraryTab(QWidget):
     def open_detail(self, game):
         # Local import to avoid circular dependency
         from src.ui.dialogs.game_detail import GameDetailPanel
+
+        try:
+            self._request_cloud_badge_prime([game])
+        except Exception:
+            pass
         
         # Remove old detail page if exists
         if self.detail_panel:

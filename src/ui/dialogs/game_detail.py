@@ -33,6 +33,18 @@ EXCLUDED_EXES = [
 ]
 
 
+def _entry_has_cloud_save(entry):
+    if not isinstance(entry, dict):
+        return False
+    explicit = entry.get("has_cloud_save")
+    if explicit is not None:
+        return bool(explicit)
+    return bool(
+        entry.get('save_updated_at') or entry.get('save_mtime') or
+        entry.get('state_updated_at') or entry.get('state_mtime')
+    )
+
+
 class UninstallConfirmDialog(QDialog):
     def __init__(self, title_text, message, parent=None):
         super().__init__(parent)
@@ -564,11 +576,7 @@ class GameDetailPanel(QWidget):
             watcher = getattr(self.main_window, 'watcher', None)
             sync_cache = watcher.sync_cache if watcher and isinstance(watcher.sync_cache, dict) else {}
             entry = sync_cache.get(rom_id, {}) if isinstance(sync_cache, dict) else {}
-            if isinstance(entry, dict):
-                has_cloud_save = bool(
-                    entry.get('save_updated_at') or entry.get('save_mtime') or
-                    entry.get('state_updated_at') or entry.get('state_mtime')
-                )
+            has_cloud_save = _entry_has_cloud_save(entry)
         except Exception:
             has_cloud_save = False
 

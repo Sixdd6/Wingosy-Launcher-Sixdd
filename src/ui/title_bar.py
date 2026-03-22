@@ -2,7 +2,7 @@ import os
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QLabel, QPushButton, 
                              QSpacerItem, QSizePolicy)
 from PySide6.QtGui import QFont, QIcon, QPixmap, Qt
-from PySide6.QtCore import Signal, Slot, QPoint
+from PySide6.QtCore import Signal, Slot, QTimer
 
 from src.ui.widgets import get_resource_path
 
@@ -13,7 +13,6 @@ class WingosyTitleBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(40)
-        self._drag_pos = None
 
         self._ctrl_btn_font = QFont("Segoe MDL2 Assets")
         
@@ -192,12 +191,39 @@ class WingosyTitleBar(QWidget):
         self.window().showMinimized()
 
     def _maximize_restore(self):
-        if self.window().isMaximized():
-            self.window().showNormal()
-            self.set_maximized(False)
+        window = self.window()
+        if not window:
+            return
+
+        should_maximize = not bool(window.windowState() & Qt.WindowMaximized)
+
+        try:
+            import sys
+            if sys.platform == "win32":
+                import ctypes
+                hwnd = int(window.winId())
+                WM_SYSCOMMAND = 0x0112
+                SC_RESTORE = 0xF120
+                SC_MAXIMIZE = 0xF030
+                cmd = SC_MAXIMIZE if should_maximize else SC_RESTORE
+                ctypes.windll.user32.SendMessageW(hwnd, WM_SYSCOMMAND, cmd, 0)
+
+                def _fallback_state_sync():
+                    is_max = bool(window.windowState() & Qt.WindowMaximized)
+                    if should_maximize and not is_max:
+                        window.showMaximized()
+                    elif (not should_maximize) and is_max:
+                        window.showNormal()
+
+                QTimer.singleShot(0, _fallback_state_sync)
+                return
+        except Exception:
+            pass
+
+        if should_maximize:
+            window.showMaximized()
         else:
-            self.window().showMaximized()
-            self.set_maximized(True)
+            window.showNormal()
 
     def _close(self):
         self.window().close()

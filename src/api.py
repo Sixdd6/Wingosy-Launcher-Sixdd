@@ -492,30 +492,7 @@ class RomMClient:
             )
         except Exception:
             note_ok = False
-
-        candidates = [
-            ("PATCH", f"{self.host}/api/roms/{rid}", {"playtime_seconds": secs}),
-            ("PATCH", f"{self.host}/api/roms/{rid}", {"playtime": secs}),
-            ("POST", f"{self.host}/api/roms/{rid}/playtime", {"seconds": secs}),
-            ("POST", f"{self.host}/api/roms/{rid}/playtime", {"playtime_seconds": secs}),
-        ]
-
-        legacy_ok = False
-        for method, url, payload in candidates:
-            try:
-                if method == "PATCH":
-                    r = requests.patch(url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT, verify=CERTIFI_PATH)
-                else:
-                    r = requests.post(url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT, verify=CERTIFI_PATH)
-
-                if r.status_code in (200, 201, 204):
-                    legacy_ok = True
-                    break
-                if r.status_code in (400, 404, 405, 422):
-                    continue
-            except Exception:
-                continue
-        return note_ok or legacy_ok
+        return note_ok
 
     def get_cover_url(self, game):
         path = game.get('path_cover_large') or game.get('path_cover_small') 
@@ -536,11 +513,6 @@ class RomMClient:
             try:
                 r = requests.get(url, headers=self.get_auth_headers(), stream=True, 
                                  timeout=REQUEST_TIMEOUT, verify=CERTIFI_PATH)
-                if r.status_code == 404:
-                    # Fallback to /download path ONLY if 404
-                    url = f"{self.host}/api/roms/{rom_id}/download"
-                    r = requests.get(url, headers=self.get_auth_headers(), stream=True, 
-                                     timeout=REQUEST_TIMEOUT, verify=CERTIFI_PATH)
             except (requests.exceptions.ConnectTimeout,
                     requests.exceptions.ConnectionError,
                     requests.exceptions.Timeout,
@@ -594,6 +566,19 @@ class RomMClient:
                 return value
         return []
 
+    def _extract_paginated_items(self, payload, preferred_keys=None):
+        if isinstance(payload, list):
+            return payload
+        if not isinstance(payload, dict):
+            return []
+
+        keys = list(preferred_keys or []) + ["items", "results", "data"]
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+        return []
+
     def _item_updated_key(self, item):
         if not isinstance(item, dict):
             return ""
@@ -623,9 +608,14 @@ class RomMClient:
 
     def delete_save(self, save_id):
         try:
-            url = f"{self.host}/api/saves/{save_id}"
-            r = requests.delete(url, headers=self.get_auth_headers(), 
-                                timeout=REQUEST_TIMEOUT, verify=CERTIFI_PATH)
+            # RomM OpenAPI: POST /api/saves/delete with {"saves": [id]}
+            r = requests.post(
+                f"{self.host}/api/saves/delete",
+                headers=self.get_auth_headers(),
+                json={"saves": [int(save_id)]},
+                timeout=REQUEST_TIMEOUT,
+                verify=CERTIFI_PATH,
+            )
             return r.status_code in [200, 204]
         except Exception as e:
             print(f"[API] delete_save error: {e}")
@@ -653,9 +643,14 @@ class RomMClient:
 
     def delete_state(self, state_id):
         try:
-            url = f"{self.host}/api/states/{state_id}"
-            r = requests.delete(url, headers=self.get_auth_headers(), 
-                                timeout=REQUEST_TIMEOUT, verify=CERTIFI_PATH)
+            # RomM OpenAPI: POST /api/states/delete with {"states": [id]}
+            r = requests.post(
+                f"{self.host}/api/states/delete",
+                headers=self.get_auth_headers(),
+                json={"states": [int(state_id)]},
+                timeout=REQUEST_TIMEOUT,
+                verify=CERTIFI_PATH,
+            )
             return r.status_code in [200, 204]
         except Exception as e:
             print(f"[API] delete_state error: {e}")
@@ -664,7 +659,14 @@ class RomMClient:
     def download_save(self, save_item, target_path, thread=None):
         try:
             path = save_item.get('download_path') or save_item.get('path')
-            url = path if path.startswith('http') else f"{self.host}{path}"
+            if isinstance(path, str) and path:
+                url = path if path.startswith('http') else f"{self.host}{path}"
+            else:
+                save_id = save_item.get('id')
+                if save_id is None:
+                    return False
+                # RomM OpenAPI: GET /api/saves/{id}/content
+                url = f"{self.host}/api/saves/{save_id}/content"
             try:
                 r = requests.get(url, headers=self.get_auth_headers(), stream=True, 
                                  timeout=REQUEST_TIMEOUT, verify=CERTIFI_PATH)
@@ -692,13 +694,29 @@ class RomMClient:
 
     def download_state(self, state_obj, dest_path):
         try:
-            dl_path = state_obj.get('download_path') or \
-                      state_obj.get('file_path') or \
-                      f"/api/states/{state_obj['id']}/download"
+            dl_path = state_obj.get('download_path') or state_obj.get('file_path')
+            if not dl_path:
+                state_id = state_obj.get('id')
+                if state_id is None:
+                    return False
+                r = requests.get(
+                    f"{self.host}/api/states/{state_id}",
+                    headers=self.get_auth_headers(),
+                    timeout=REQUEST_TIMEOUT,
+                    verify=CERTIFI_PATH,
+                )
+                if r.status_code != 200:
+                    return False
+                state_payload = r.json() if isinstance(r.json(), dict) else {}
+                dl_path = state_payload.get('download_path') or state_payload.get('file_path')
+                if not dl_path:
+                    return False
             url = dl_path if dl_path.startswith('http') \
                   else f"{self.host}{dl_path}"
             r = requests.get(url, headers=self.get_auth_headers(),
                            stream=True, timeout=60, verify=CERTIFI_PATH)
+            if r.status_code != 200:
+                return False
             with open(dest_path, 'wb') as f:
                 for chunk in r.iter_content(65536):
                     if chunk: f.write(chunk)
@@ -781,25 +799,48 @@ class RomMClient:
 
     def get_firmware(self):
         """
-        Fetch BIOS/firmware files by iterating platforms and collecting their firmware objects.
+        Fetch BIOS/firmware files from RomM's dedicated firmware endpoint.
         """
         try:
-            url = f"{self.host}/api/platforms"
-            r = requests.get(url, headers=self.get_auth_headers(), 
-                             timeout=REQUEST_TIMEOUT, verify=CERTIFI_PATH)
-            
-            if r.status_code == 200:
-                platforms = r.json()
-                firmware_list = []
-                for p in platforms:
-                    fws = p.get('firmware', [])
-                    for f in fws:
-                        f['platform_name'] = p.get('name')
-                        f['platform_slug'] = p.get('slug')
-                        f['platform_id'] = p.get('id')
-                        firmware_list.append(f)
-                return firmware_list
-            return []
+            url = f"{self.host}/api/firmware"
+            params = {"limit": 100, "offset": 0}
+            firmware_list = []
+
+            while True:
+                r = requests.get(
+                    url,
+                    params=params,
+                    headers=self.get_auth_headers(),
+                    timeout=REQUEST_TIMEOUT,
+                    verify=CERTIFI_PATH,
+                )
+                if r.status_code != 200:
+                    return firmware_list
+
+                payload = r.json()
+                items = self._extract_paginated_items(payload, preferred_keys=["firmware"])
+                if not items and isinstance(payload, list):
+                    items = payload
+
+                if not items:
+                    break
+
+                firmware_list.extend(items)
+
+                if not isinstance(payload, dict):
+                    break
+
+                total = payload.get("total") or payload.get("count")
+                if isinstance(total, int) and total > 0:
+                    if len(firmware_list) >= total:
+                        break
+
+                if len(items) < params["limit"]:
+                    break
+
+                params["offset"] += params["limit"]
+
+            return firmware_list
         except Exception as e:
             print(f"[API] Error getting firmware: {e}")
             return []
@@ -813,12 +854,19 @@ class RomMClient:
     def download_firmware(self, fw_item, target_path, progress_cb=None, thread=None):
         try:
             path = fw_item.get('download_path')
-            if not path:
-                slug = fw_item.get('platform_slug', 'unknown')
-                name = fw_item.get('file_name')
-                path = f"/api/raw/assets/firmware/{slug}/{name}"
-
-            url = path if path.startswith('http') else f"{self.host}{path}"
+            if isinstance(path, str) and path:
+                url = path if path.startswith('http') else f"{self.host}{path}"
+            else:
+                fw_id = fw_item.get('id')
+                file_name = fw_item.get('file_name') or fw_item.get('name')
+                if fw_id is None or not file_name:
+                    slug = fw_item.get('platform_slug', 'unknown')
+                    file_name = file_name or ""
+                    url = f"{self.host}/api/raw/assets/firmware/{slug}/{file_name}"
+                else:
+                    encoded_name = quote(str(file_name))
+                    # RomM OpenAPI: GET /api/firmware/{id}/content/{file_name}
+                    url = f"{self.host}/api/firmware/{fw_id}/content/{encoded_name}"
             try:
                 r = requests.get(url, headers=self.get_auth_headers(), stream=True, 
                                  timeout=60, verify=CERTIFI_PATH)
