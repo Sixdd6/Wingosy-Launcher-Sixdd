@@ -191,6 +191,69 @@ class TestResolveLocalRomPathWindows:
         assert resolved is None
 
 
+class TestResolveLocalRomPathM3uPreference:
+    def test_multi_file_prefers_m3u_when_enabled(self, tmp_path):
+        from src.utils import resolve_local_rom_path
+
+        game = {
+            "platform_slug": "psx",
+            "fs_name": "Game (Disc 1).bin",
+            "files": [
+                {"file_name": "Game (Disc 1).bin"},
+                {"file_name": "Game (Disc 1).cue"},
+                {"file_name": "Game.m3u"},
+            ],
+        }
+
+        base_rom = tmp_path / "roms"
+        platform_dir = base_rom / "psx"
+        platform_dir.mkdir(parents=True, exist_ok=True)
+        m3u_path = platform_dir / "Game.m3u"
+        cue_path = platform_dir / "Game (Disc 1).cue"
+        bin_path = platform_dir / "Game (Disc 1).bin"
+        m3u_path.write_text("Game (Disc 1).cue\n")
+        cue_path.write_text("FILE \"Game (Disc 1).bin\" BINARY\n")
+        bin_path.write_bytes(b"bin")
+
+        resolved = resolve_local_rom_path(
+            game,
+            {"base_rom_path": str(base_rom)},
+            prefer_m3u_for_multi=True,
+        )
+
+        assert resolved == m3u_path
+
+    def test_multi_file_keeps_default_non_m3u_behavior(self, tmp_path):
+        from src.utils import resolve_local_rom_path
+
+        game = {
+            "platform_slug": "psx",
+            "fs_name": "Game (Disc 1).bin",
+            "files": [
+                {"file_name": "Game (Disc 1).bin"},
+                {"file_name": "Game (Disc 1).cue"},
+                {"file_name": "Game.m3u"},
+            ],
+        }
+
+        base_rom = tmp_path / "roms"
+        platform_dir = base_rom / "psx"
+        platform_dir.mkdir(parents=True, exist_ok=True)
+        m3u_path = platform_dir / "Game.m3u"
+        cue_path = platform_dir / "Game (Disc 1).cue"
+        bin_path = platform_dir / "Game (Disc 1).bin"
+        m3u_path.write_text("Game (Disc 1).cue\n")
+        cue_path.write_text("FILE \"Game (Disc 1).bin\" BINARY\n")
+        bin_path.write_bytes(b"bin")
+
+        resolved = resolve_local_rom_path(
+            game,
+            {"base_rom_path": str(base_rom)},
+        )
+
+        assert resolved == bin_path
+
+
 # ── Dummy Client ──────────────────────────────────────────────────────────
 
 class TestDummyClient:

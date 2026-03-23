@@ -41,7 +41,12 @@ def build_rom_search_index(*roots: Path):
     return index
 
 
-def resolve_local_rom_path(game: dict, config_data: dict, search_index: Optional[dict] = None) -> Optional[Path]:
+def resolve_local_rom_path(
+    game: dict,
+    config_data: dict,
+    search_index: Optional[dict] = None,
+    prefer_m3u_for_multi: bool = False,
+) -> Optional[Path]:
     """
     Robustly find a ROM on disk using multiple strategies:
     1. Check base_rom_path / platform / filename
@@ -58,9 +63,16 @@ def resolve_local_rom_path(game: dict, config_data: dict, search_index: Optional
     platform = game.get('platform_slug')
     rom_name = game.get('fs_name')
     files = game.get('files') or []
+    file_names = []
     file_obj_name = None
-    if files and isinstance(files, list) and isinstance(files[0], dict):
-        file_obj_name = files[0].get('file_name')
+    if files and isinstance(files, list):
+        for f in files:
+            if isinstance(f, dict):
+                n = f.get('file_name')
+                if n:
+                    file_names.append(n)
+        if file_names:
+            file_obj_name = file_names[0]
     if not rom_name and not file_obj_name:
         return None
         
@@ -95,35 +107,35 @@ def resolve_local_rom_path(game: dict, config_data: dict, search_index: Optional
     base_path = Path(base_rom)
     stem = Path(rom_name or file_obj_name).stem
     
+    multi_file_game = len(file_names) > 1
+    prefer_m3u = bool(prefer_m3u_for_multi and multi_file_game and not is_windows)
+
     # Exclusion list: .cue files are often metadata and not what we want to launch/hash
     excluded_exts = {'.cue'}
 
     def is_excluded(p: Path) -> bool:
         return p.suffix.lower() in excluded_exts
 
-    # 1. Base / Platform / Filename (Exact)
-    if platform and rom_name:
-        p1 = base_path / platform / rom_name
-        if p1.exists() and not is_excluded(p1):
-            return p1
+    exact_candidates = []
+    for n in [rom_name, *file_names]:
+        if n and n not in exact_candidates:
+            exact_candidates.append(n)
 
-    # 1b. Base / Platform / Server file_name (Exact)
-    if platform and file_obj_name:
-        p1b = base_path / platform / file_obj_name
-        if p1b.exists() and not is_excluded(p1b):
-            return p1b
-            
-    # 2. Base / Filename (Exact)
-    if rom_name:
-        p2 = base_path / rom_name
-        if p2.exists() and not is_excluded(p2):
-            return p2
+    if prefer_m3u:
+        m3u_candidates = [n for n in exact_candidates if Path(n).suffix.lower() == '.m3u']
+        non_m3u_candidates = [n for n in exact_candidates if Path(n).suffix.lower() != '.m3u']
+        exact_candidates = m3u_candidates + non_m3u_candidates
 
-    # 2b. Base / Server file_name (Exact)
-    if file_obj_name:
-        p2b = base_path / file_obj_name
-        if p2b.exists() and not is_excluded(p2b):
-            return p2b
+    # 1-2. Exact matches (platform subdir first, then base)
+    for name in exact_candidates:
+        if platform:
+            p_platform = base_path / platform / name
+            if p_platform.exists() and not is_excluded(p_platform):
+                return p_platform
+
+        p_base = base_path / name
+        if p_base.exists() and not is_excluded(p_base):
+            return p_base
 
     # 3. Fuzzy extension matching fallbacks
     # Common disc and ROM formats: .chd, .iso, .cso, .pbp, .bin, .img, .mdf, .z64, .n64, .v64
@@ -168,7 +180,7 @@ def resolve_local_rom_path(game: dict, config_data: dict, search_index: Optional
             if p_dir and Path(p_dir).exists() and Path(p_dir).is_dir():
                 return Path(p_dir)
 
-            all_names = [n for n in [rom_name, file_obj_name] if n]
+            all_names = [n for n in exact_candidates if n]
             for name in all_names:
                 p = search_index.get("files_by_name", {}).get(name)
                 if p and Path(p).exists() and not is_excluded(Path(p)):
@@ -188,7 +200,7 @@ def resolve_local_rom_path(game: dict, config_data: dict, search_index: Optional
 
     if base_path.is_dir():
         # Build set of all candidate names including original
-        all_candidates = {n for n in [rom_name, file_obj_name] if n} | {stem + ext for ext in extensions} | {stem}
+        all_candidates = {n for n in exact_candidates if n} | {stem + ext for ext in extensions} | {stem}
         
         for root, dirs, files in os.walk(base_rom):
             # Check files first

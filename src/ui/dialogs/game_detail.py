@@ -877,8 +877,12 @@ class GameDetailPanel(QWidget):
         self.pbar.hide()
         self._update_button_states()
 
-    def _get_local_rom_path(self):
-        return resolve_local_rom_path(self.game, self.config.data)
+    def _get_local_rom_path(self, prefer_m3u_for_multi=False):
+        return resolve_local_rom_path(
+            self.game,
+            self.config.data,
+            prefer_m3u_for_multi=prefer_m3u_for_multi,
+        )
         
     def _update_button_states(self):
         self._local_rom_path = self._get_local_rom_path()
@@ -2203,7 +2207,7 @@ class GameDetailPanel(QWidget):
         return True
 
     def play_game(self):
-        local_rom = self._get_local_rom_path()
+        local_rom = self._get_local_rom_path(prefer_m3u_for_multi=True)
         if not local_rom or not local_rom.exists():
             StyledMessageBox.warning(self, "Error — Wingosy", "Could not find the local ROM file. Please download it first.")
             return

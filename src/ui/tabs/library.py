@@ -693,12 +693,24 @@ class LibraryTab(QWidget):
         # Installation Toggle Bar
         self.install_filter_widget = QWidget()
         self.install_filter_widget.setStyleSheet("background: #111; border-bottom: 1px solid #222;")
-        install_layout = QHBoxLayout(self.install_filter_widget)
+        install_layout = QGridLayout(self.install_filter_widget)
         install_layout.setContentsMargins(10, 5, 10, 5)
         install_layout.setSpacing(5)
 
+        install_column_widget = QWidget()
+        install_column_layout = QHBoxLayout(install_column_widget)
+        install_column_layout.setContentsMargins(0, 0, 0, 0)
+        install_column_layout.setSpacing(5)
+
+        alpha_column_widget = QWidget()
+        alpha_column_layout = QHBoxLayout(alpha_column_widget)
+        alpha_column_layout.setContentsMargins(0, 0, 0, 0)
+        alpha_column_layout.setSpacing(2)
+
         self.install_filter_group = []
+        self.alpha_filter_group = []
         self.current_install_filter = "all" # "all", "installed", "not_installed"
+        self.current_alpha_filter = None
 
         for label, filter_id in [("All", "all"), ("Installed", "installed"), ("Not Installed", "not_installed")]:
             btn = QPushButton(label)
@@ -725,10 +737,42 @@ class LibraryTab(QWidget):
                 }
             """)
             btn.clicked.connect(lambda checked, fid=filter_id: self._set_install_filter(fid))
-            install_layout.addWidget(btn)
+            install_column_layout.addWidget(btn)
             self.install_filter_group.append(btn)
-        
-        install_layout.addStretch()
+
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            btn = QPushButton(letter)
+            btn.setCheckable(True)
+            btn.setAutoExclusive(False)
+            btn.setFixedWidth(30)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: #1b1b1b;
+                    color: #888;
+                    border: none;
+                    padding: 4px 0;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background: #2a2a2a;
+                    color: #fff;
+                }
+                QPushButton:checked {
+                    background: #0d6efd;
+                    color: #fff;
+                }
+            """)
+            btn.clicked.connect(lambda checked, selected=letter: self._set_alpha_filter(selected, checked))
+            alpha_column_layout.addWidget(btn)
+            self.alpha_filter_group.append(btn)
+
+        install_layout.addWidget(install_column_widget, 0, 0, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+        install_layout.addWidget(alpha_column_widget, 0, 1, alignment=Qt.AlignHCenter | Qt.AlignVCenter)
+        install_layout.setColumnStretch(0, 1)
+        install_layout.setColumnStretch(1, 1)
+        install_layout.setColumnStretch(2, 1)
+
         self.main_layout.addWidget(self.install_filter_widget)
 
         # Stack area
@@ -1266,6 +1310,18 @@ class LibraryTab(QWidget):
         self.current_install_filter = filter_id
         self.apply_filters()
 
+    def _set_alpha_filter(self, letter, checked):
+        if checked:
+            self.current_alpha_filter = letter
+            for btn in self.alpha_filter_group:
+                is_current = btn.text() == letter
+                if btn.isChecked() != is_current:
+                    btn.setChecked(is_current)
+        elif self.current_alpha_filter == letter:
+            self.current_alpha_filter = None
+
+        self.apply_filters()
+
     def _on_search_text_changed(self, text):
         if not text:
             self.apply_filters()
@@ -1285,8 +1341,21 @@ class LibraryTab(QWidget):
         my_filter_gen = self._filter_generation
 
         text = self.search_input.text().lower()
+        alpha = str(getattr(self, "current_alpha_filter", "") or "").lower()
         platform = getattr(self, "_platform_selection", None) or self.platform_filter.currentText() or "All Platforms"
         self._selected_index = -1
+
+        def _matches_search_filters(game):
+            name = str(game.get('name', '') or '')
+            fs_name = str(game.get('fs_name', '') or '')
+            name_lower = name.lower()
+            fs_name_lower = fs_name.lower()
+
+            if text and text not in name_lower and text not in fs_name_lower:
+                return False
+            if alpha and not (name_lower.startswith(alpha) or fs_name_lower.startswith(alpha)):
+                return False
+            return True
 
         if platform == "⚠️ No Emulator":
             all_known = set(RETROARCH_PLATFORMS)
@@ -1295,16 +1364,12 @@ class LibraryTab(QWidget):
             base_filtered = [
                 g for g in self.main_window.all_games
                 if g.get("platform_slug") not in all_known
-                and (not text
-                     or text in str(g.get('name', '')).lower()
-                     or text in str(g.get('fs_name', '')).lower())
+                and _matches_search_filters(g)
             ]
         else:
             base_filtered = [
                 g for g in self.main_window.all_games
-                if (not text
-                    or text in str(g.get('name', '')).lower()
-                    or text in str(g.get('fs_name', '')).lower())
+                if _matches_search_filters(g)
                 and (platform == "All Platforms"
                      or g.get('platform_display_name') == platform
                      or g.get('platform_slug') == platform)
