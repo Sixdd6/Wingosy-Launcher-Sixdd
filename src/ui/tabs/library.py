@@ -650,6 +650,7 @@ class LibraryTab(QWidget):
         self._library_update_timer.setSingleShot(True)
         self._library_update_timer.setInterval(300)  # 300ms debounce
         self._library_update_timer.timeout.connect(self._do_library_refresh)
+        self._library_refresh_pending = False
 
         try:
             watcher = getattr(self.main_window, 'watcher', None)
@@ -1137,14 +1138,38 @@ class LibraryTab(QWidget):
         Instead of appending to the end (which breaks alphabetical order),
         trigger a full apply_filters re-render so all games are sorted correctly.
         
-        BUG FIX: Debounce this to avoid rapid successive grid rebuilds during parallel fetch.
+        BUG FIX: Throttle this so filters update during parsing without rebuilding
+        for every single page.
         """
         # Games are already added to main_window.all_games by the caller.
-        self._library_update_timer.start()
+        self._queue_library_refresh(immediate=True)
+
+    def _queue_library_refresh(self, immediate=False):
+        """Schedule a throttled library refresh.
+
+        immediate=True triggers a leading-edge refresh (first update right away),
+        then keeps the debounce window active for follow-up updates.
+        """
+        self._library_refresh_pending = True
+
+        if immediate and not self._library_update_timer.isActive():
+            self._do_library_refresh()
+            self._library_update_timer.start()
+            return
+
+        if not self._library_update_timer.isActive():
+            self._library_update_timer.start()
 
     def _do_library_refresh(self):
         """Actual logic for debounced library refresh."""
+        if not self._library_refresh_pending:
+            return
+
+        self._library_refresh_pending = False
         self.apply_filters()
+
+        if self._library_refresh_pending:
+            self._library_update_timer.start()
 
     def _get_card_size(self):
         """Compute card width/height based on viewport width and cols setting."""
@@ -1417,10 +1442,10 @@ class LibraryTab(QWidget):
             except RuntimeError:
                 continue
 
-        if found and self.current_install_filter != "all":
-            # Re-apply filters if we are in an install-specific view (e.g. "Not Installed")
-            # so the card can disappear or appear correctly.
-            self.apply_filters()
+        if self.current_install_filter != "all":
+            # Re-apply install-specific filters so cards can appear/disappear as
+            # local discovery progresses, even if the card is not currently visible.
+            self._queue_library_refresh()
 
     def refresh_card_states(self):
         """Re-apply filters to catch any registry changes (e.g. cancellations)."""
@@ -1433,64 +1458,71 @@ class LibraryTab(QWidget):
         self.apply_filters()
 
     def populate_grid(self, games):
+        viewport = self.scroll_area.viewport()
+        viewport.setUpdatesEnabled(False)
+
         # Reset refresh button style
-        self.refresh_btn.setStyleSheet("")
-        self.refresh_btn.setText("🔄 Refresh")
-
-        # Increment generation — any pending render callbacks will        
-        # check this and abort immediately
-        self._render_generation += 1
-        my_gen = self._render_generation
-        
-        # BUG FIX: Also increment filter generation to stop any pending scroll loads
-        self._filter_generation += 1
-        my_filter_gen = self._filter_generation
-        
-        # BUG FIX: Stop all active image fetchers before clearing grid.
-        # We request interruption and quit, but do NOT wait() because it blocks the UI.
-        for fetcher in list(getattr(self.main_window, 'active_image_fetchers', [])):
-            try:
-                fetcher.requestInterruption()
-                fetcher.quit()
-            except (RuntimeError, AttributeError):
-                pass
-        self.main_window.active_image_fetchers = []
-        self.main_window.image_fetch_queue = []
-
-        # Start a new cover-fetch generation for this grid rebuild. This is used
-        # to ignore in-flight fetch completions from the previous grid.
         try:
-            self.main_window.fetch_generation += 1
-        except Exception:
-            pass
+            self.refresh_btn.setStyleSheet("")
+            self.refresh_btn.setText("🔄 Refresh")
 
-        self._all_cards = []
-        self._pending_games = list(games)  # full list, render in batches   
-        self._scroll_debounce.stop()  # cancel any pending debounce on grid reset
-        self._is_loading_batch = False
-        self._current_platform = getattr(self, "_platform_selection", None) or self.platform_filter.currentText()
-        self._grid_game_ids = {g.get('id') for g in games if isinstance(g, dict) and g.get('id') is not None}
-        self._selected_index = -1
+            # Increment generation — any pending render callbacks will
+            # check this and abort immediately
+            self._render_generation += 1
+            my_gen = self._render_generation
 
-        # Clear grid — use deleteLater for safety
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
-            if item and item.widget():
+            # BUG FIX: Also increment filter generation to stop any pending scroll loads
+            self._filter_generation += 1
+            my_filter_gen = self._filter_generation
+
+            # BUG FIX: Stop all active image fetchers before clearing grid.
+            # We request interruption and quit, but do NOT wait() because it blocks the UI.
+            for fetcher in list(getattr(self.main_window, 'active_image_fetchers', [])):
                 try:
-                    item.widget().hide()
-                    item.widget().deleteLater()
+                    fetcher.requestInterruption()
+                    fetcher.quit()
                 except (RuntimeError, AttributeError):
                     pass
+            self.main_window.active_image_fetchers = []
+            self.main_window.image_fetch_queue = []
 
-        # Remove old load-more label ref
-        self._load_more_label = None
+            # Start a new cover-fetch generation for this grid rebuild. This is used
+            # to ignore in-flight fetch completions from the previous grid.
+            try:
+                self.main_window.fetch_generation += 1
+            except Exception:
+                pass
 
-        if not games:
-            self.show_empty_message("No games match your search.")
-            return
+            self._all_cards = []
+            self._pending_games = list(games)  # full list, render in batches
+            self._scroll_debounce.stop()  # cancel any pending debounce on grid reset
+            self._is_loading_batch = False
+            self._current_platform = getattr(self, "_platform_selection", None) or self.platform_filter.currentText()
+            self._grid_game_ids = {g.get('id') for g in games if isinstance(g, dict) and g.get('id') is not None}
+            self._selected_index = -1
 
-        # Render first batch immediately
-        self._render_next_batch(my_gen, my_filter_gen)
+            # Clear grid — use deleteLater for safety
+            while self.grid_layout.count():
+                item = self.grid_layout.takeAt(0)
+                if item and item.widget():
+                    try:
+                        item.widget().hide()
+                        item.widget().deleteLater()
+                    except (RuntimeError, AttributeError):
+                        pass
+
+            # Remove old load-more label ref
+            self._load_more_label = None
+
+            if not games:
+                self.show_empty_message("No games match your search.")
+                return
+
+            # Render first batch immediately
+            self._render_next_batch(my_gen, my_filter_gen)
+        finally:
+            viewport.setUpdatesEnabled(True)
+            viewport.update()
 
     def _do_load_batch(self):
         """Actually load the next batch — called after scroll debounce."""
