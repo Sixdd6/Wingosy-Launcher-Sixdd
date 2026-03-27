@@ -62,7 +62,7 @@ from src.api import RomMClient
 from src.watcher import RomMateWatcher
 from src.ui import RomMateMainWindow, SetupDialog
 
-VERSION = "0.7.6"
+VERSION = "0.7.6.1"
 
 
 class LoadingDialog(QDialog):
